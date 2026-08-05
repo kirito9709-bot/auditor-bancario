@@ -532,6 +532,8 @@ if uploaded_file is not None:
     df_tx = pd.DataFrame()
     es_escaneado = False
     pdf_digital = b""
+    bytes_archivo_original = uploaded_file.read()
+    uploaded_file.seek(0)
 
     with st.spinner("🔍 Analizando estructura del documento..."):
         if ext == "pdf":
@@ -541,7 +543,7 @@ if uploaded_file is not None:
                     "⚠️ El PDF parece ser un archivo escaneado (imagen). Ejecutando motor OCR..."
                 )
                 uploaded_file.seek(0)
-                df_tx, pdf_digital = ocr_pdf_a_digital(uploaded_file.read())
+                df_tx, pdf_digital = ocr_pdf_a_digital(bytes_archivo_original)
 
         elif ext in ["xlsx", "xls"]:
             try:
@@ -613,3 +615,97 @@ if uploaded_file is not None:
             "🛡️ Diagnóstico Anti-Fraude",
             "📥 Conversión & Exportar a Excel",
         ])
+
+        with tab_tx:
+            st.markdown("##### 🔍 Detalle de Movimientos Identificados")
+            st.dataframe(df_tx, use_container_width=True, height=380)
+
+        with tab_pdf:
+            st.markdown("##### 📄 Reporte Formal para Dirección / Cliente")
+            st.info(
+                "Genera un informe institucional en PDF con branding profesional, semáforo de salud financiera y tabla analítica."
+            )
+
+            pdf_bytes_report = generar_pdf_reporte(
+                empresa=empresa_input,
+                periodo=periodo_input,
+                ingresos=ingresos_calc,
+                egresos=egresos_calc,
+                utilidad=util_neta,
+                margen=margen_calc,
+                df_tx=df_tx,
+                hallazgos=hallazgos,
+            )
+
+            st.download_button(
+                "📥 Descargar Reporte Ejecutivo en PDF",
+                data=pdf_bytes_report,
+                file_name=f"AuditSaaS_Reporte_{empresa_input.replace(' ', '_')}_{date.today().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+            )
+
+        with tab_audit:
+            st.markdown("##### 🛡️ Análisis de Inconsistencias y Alertas")
+            for h in hallazgos:
+                if "Crítica" in h or "Elevados" in h:
+                    st.error(h)
+                else:
+                    st.success(h)
+
+            if not egresos_altos.empty:
+                st.markdown("<h6>Egresos sobre el umbral configurado:</h6>", unsafe_allow_html=True)
+                st.dataframe(egresos_altos, use_container_width=True)
+
+        # ── PESTAÑA 4: CONVERSIÓN FUNCIONAL ──
+        with tab_export:
+            st.markdown("##### 📊 Conversión de Archivos y Exportación")
+            
+            col_ex1, col_ex2 = st.columns(2)
+            
+            with col_ex1:
+                st.markdown("###### 1. Convertir Estado de Cuenta (PDF/Imagen) a Excel")
+                st.write("Genera un libro interactivo `.xlsx` estructurado a partir del documento PDF cargado.")
+                
+                excel_buf = BytesIO()
+                with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                    df_tx.to_excel(writer, index=False, sheet_name="Transacciones")
+                    resumen = pd.DataFrame(
+                        {
+                            "Indicador": ["Ingresos", "Egresos", "Utilidad Neta", "Margen Neto", "Transacciones"],
+                            "Valor": [ingresos_calc, egresos_calc, util_neta, f"{margen_calc:.1f}%", conteo_calc],
+                        }
+                    )
+                    resumen.to_excel(writer, index=False, sheet_name="Resumen")
+                excel_buf.seek(0)
+                
+                st.download_button(
+                    "📥 Descargar PDF Convertido a Excel (.xlsx)",
+                    data=excel_buf,
+                    file_name=f"Estado_de_Cuenta_{empresa_input.replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+
+            with col_ex2:
+                st.markdown("###### 2. Digitalizar PDF Escaneado / Imagen a PDF Digital")
+                if pdf_digital:
+                    st.success("✅ Documento escaneado procesado con motor OCR correctamente.")
+                    st.download_button(
+                        "📥 Descargar PDF Digitalizado (OCR)",
+                        data=pdf_digital,
+                        file_name=f"AuditSaaS_Digital_{date.today().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                elif ext == "pdf" and not es_escaneado:
+                    st.info("ℹ️ Tu PDF ya posee texto vectorial seleccionable. No requiere conversión OCR.")
+                else:
+                    st.info("ℹ️ Carga un PDF o imagen escaneada para habilitar la digitalización OCR.")
+
+    else:
+        st.warning(
+            "⚠️ No se encontraron tablas ni datos legibles de transacciones en el archivo cargado."
+        )
+
+else:
+    st.info("👆 Por favor sube un estado de cuenta en formato PDF o Excel para comenzar el proceso de auditoría y conversión.")
