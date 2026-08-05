@@ -103,111 +103,24 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO
+# FUNCIONES DE PROCESAMIENTO (MOTOR BBVA REAL)
 # ─────────────────────────────────────────────
-KEYWORDS_INGRESO = [
-    "abono",
-    "deposito",
-    "depositos",
-    "recibido",
-    "credito",
-    "transferencia recibida",
-    "ingreso",
-    "intereses ganados",
-    "spei recibido",
-    "nomm",
-    "factura",
-    "cobro",
-    "venta",
-]
-KEYWORDS_EGRESO = [
-    "cargo",
-    "retiro",
-    "pago",
-    "compra",
-    "comision",
-    "iva",
-    "spei enviado",
-    "debito",
-    "cheque",
-    "egreso",
-    "disposicion",
-    "impuesto",
-    "isr",
-    "comision por",
-    "mantenimiento",
-    "gasto",
-]
-
-# TÉRMINOS ESTRICTOS PARA IGNORAR CUADROS FINANCIEROS Y TOTALES ACUMULADOS
-IGNORE_TERMS = [
-    "saldo anterior",
-    "saldo final",
-    "saldo promedio",
-    "saldo del periodo",
-    "total importe",
-    "total de movimientos",
-    "total cargos",
-    "total abonos",
-    "total operaciones",
-    "cuadro resumen",
-    "información financiera",
-    "rendimiento",
-    "gat nominal",
-    "gat real",
-    "comisión cobrada",
-    "iva cobrado",
-    "concepto cantidad porcentaje",
-    "retiros total",
-    "depósitos total",
-]
 
 
-def clasificar_concepto(texto: str) -> str:
+def clasificar_concepto_bbva(texto: str) -> str:
   t = texto.lower()
-  if any(k in t for k in KEYWORDS_INGRESO):
+  if any(
+      k in t
+      for k in [
+          "deposito",
+          "abono",
+          "spei recibido",
+          "transferencia recibida",
+          "recibido",
+      ]
+  ):
     return "Ingreso"
-  if any(k in t for k in KEYWORDS_EGRESO):
-    return "Egreso"
   return "Egreso"
-
-
-def parsear_lineas_texto(text: str, origen: str) -> list:
-  rows = []
-  lines = text.split("\n")
-  pattern = re.compile(
-      r"(\d{2}[/-]\d{2}[/-]\d{2,4}|\d{2}\s+[A-Za-z]{3})\s+(.*?)\s+[\$]?\s*([0-9,]+\.[0-9]{2})"
-  )
-  for line in lines:
-    line_clean = line.strip()
-    if not line_clean:
-      continue
-
-    line_lower = line_clean.lower()
-    if (
-        any(term in line_lower for term in IGNORE_TERMS)
-        or line_lower.startswith("total")
-    ):
-      continue
-
-    match = pattern.search(line_clean)
-    if match:
-      fecha, concepto, monto_str = match.groups()
-      try:
-        monto = float(monto_str.replace(",", ""))
-        if monto > 0:
-          tipo = clasificar_concepto(concepto)
-          rows.append({
-              "Origen": origen,
-              "Fecha": fecha.strip(),
-              "Concepto": concepto.strip(),
-              "Monto": monto,
-              "Tipo": tipo,
-              "Estado": "Normal",
-          })
-      except ValueError:
-        pass
-  return rows
 
 
 def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
@@ -221,49 +134,61 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
       txt = page.extract_text() or ""
       texto_total += txt
 
-      tables = page.extract_tables()
-      for tbl in tables:
-        for row in tbl:
-          if not row:
-            continue
-          rc = [
-              str(c).replace("\n", " ").strip() for c in row if c is not None
-          ]
-          if len(rc) < 2:
-            continue
+      # Procesamiento línea por línea enfocado estrictamente en formato de Estado de Cuenta BBVA
+      lines = txt.split("\n")
+      for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+          continue
 
-          linea_str = " ".join(rc).lower()
-          if (
-              any(term in linea_str for term in IGNORE_TERMS)
-              or linea_str.startswith("total")
-          ):
-            continue
+        # Ignorar encabezados, pies de página o resúmenes irrelevantes
+        line_lower = line_clean.lower()
+        if any(
+            term in line_lower
+            for term in [
+                "saldo anterior",
+                "saldo final",
+                "saldo promedio",
+                "total de movimientos",
+                "total cargos",
+                "total abonos",
+                "cajero automatico",
+                "comision",
+                "iva",
+                "rendimiento",
+                "gat",
+                "rfc",
+                "página",
+                "estado de cuenta",
+            ]
+        ):
+          continue
 
-          # Búsqueda ajustada para leer montos que pueden estar separados en columnas de depósitos/retiros
-          for cell in rc:
-            m = re.search(
-                r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)",
-                cell,
-            )
-            if m:
-              try:
-                v = float(m.group(1).replace(",", ""))
-                if v > 0:
-                  tipo = clasificar_concepto(linea_str)
-                  rows.append({
-                      "Origen": f"Pág.{i}",
-                      "Fecha": rc[0] if len(rc) > 0 else "N/A",
-                      "Concepto": rc[1] if len(rc) > 1 else "Movimiento",
-                      "Monto": v,
-                      "Tipo": tipo,
-                      "Estado": "Normal",
-                  })
-                  break
-              except ValueError:
-                pass
-
-      if not tables and txt.strip():
-        rows.extend(parsear_lineas_texto(txt, f"Pág.{i}"))
+        # Regex específica para detectar transacciones de estados de cuenta bancarios (Fecha DD/MMM o DD/MM, Concepto, Importe)
+        # Ejemplo típico BBVA: "16 AGO  TRANSFERENCIA BANCARIA  1,500.00" o similar
+        match = re.search(
+            r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})(?:\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}))?",
+            line_clean,
+        )
+        if match:
+          fecha = match.group(1).strip()
+          concepto = match.group(2).strip()
+          # Determinar el monto (si hay múltiples columnas numéricas, se evalúa la última o la activa)
+          monto_str = match.group(3).replace(",", "")
+          try:
+            monto = float(monto_str)
+            if monto > 0:
+              tipo = clasificar_concepto_bbva(concepto)
+              rows.append({
+                  "Origen": f"Pág.{i}",
+                  "Fecha": fecha,
+                  "Concepto": concepto,
+                  "Monto": monto,
+                  "Tipo": tipo,
+                  "Estado": "Normal",
+              })
+          except ValueError:
+            pass
 
     if len(texto_total.strip()) < 50 and len(rows) == 0:
       es_escaneado = True
@@ -300,7 +225,27 @@ def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
   for idx, img in enumerate(images, 1):
     txt = pytesseract.image_to_string(img, lang="spa+eng")
     all_text += f"\n--- Página {idx} ---\n" + txt
-    rows.extend(parsear_lineas_texto(txt, f"OCR Pág.{idx}"))
+    lines = txt.split("\n")
+    for line in lines:
+      match = re.search(
+          r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
+          line.strip(),
+      )
+      if match:
+        fecha, concepto, monto_str = match.groups()
+        try:
+          monto = float(monto_str.replace(",", ""))
+          tipo = clasificar_concepto_bbva(concepto)
+          rows.append({
+              "Origen": f"OCR Pág.{idx}",
+              "Fecha": fecha.strip(),
+              "Concepto": concepto.strip(),
+              "Monto": monto,
+              "Tipo": tipo,
+              "Estado": "Normal",
+          })
+        except ValueError:
+          pass
 
   df = (
       pd.DataFrame(rows)
@@ -598,7 +543,7 @@ if uploaded_file is not None:
       try:
         df_tx = pd.read_excel(uploaded_file)
         if "Tipo" not in df_tx.columns and "Concepto" in df_tx.columns:
-          df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_concepto)
+          df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_concepto_bbva)
       except Exception as e:
         st.error(f"Error al leer el archivo Excel: {e}")
 
