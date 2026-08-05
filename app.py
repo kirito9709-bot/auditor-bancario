@@ -14,7 +14,6 @@ from reportlab.platypus import (
     Table,
     TableStyle,
     HRFlowable,
-    PageBreak,
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
@@ -28,7 +27,7 @@ except ImportError:
     OCR_DISPONIBLE = False
 
 # ─────────────────────────────────────────────
-# CONFIG
+# CONFIGURACIÓN DE PÁGINA
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="AuditSaaS — Auditor Financiero para PyMEs",
@@ -38,28 +37,28 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# CSS PROFESIONAL
+# ESTILOS CSS PROFESIONALES
 # ─────────────────────────────────────────────
 st.markdown(
     """
 <style>
-/* ── Globals ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 #MainMenu, footer { visibility: hidden; }
 
-/* ── Sidebar ── */
+/* Sidebar */
 [data-testid="stSidebar"] {
     background: linear-gradient(160deg, #0F172A 0%, #1E3A8A 100%) !important;
 }
 [data-testid="stSidebar"] * { color: #E2E8F0 !important; }
 [data-testid="stSidebar"] .stSelectbox label,
-[data-testid="stSidebar"] .stNumberInput label {
+[data-testid="stSidebar"] .stNumberInput label,
+[data-testid="stSidebar"] .stTextInput label {
     color: #93C5FD !important;
     font-weight: 600;
 }
 
-/* ── Metric Cards ── */
+/* Metric Cards */
 [data-testid="stMetric"] {
     background: white;
     border-radius: 14px;
@@ -81,7 +80,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     color: #0F172A !important;
 }
 
-/* ── Buttons ── */
+/* Botones */
 .stDownloadButton > button {
     background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important;
     color: white !important;
@@ -98,20 +97,12 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
     box-shadow: 0 6px 16px rgba(37,99,235,0.3) !important;
 }
 
-/* ── File Uploader ── */
+/* Uploader */
 [data-testid="stFileUploader"] {
     background: #F8FAFC;
     border: 2px dashed #CBD5E1;
     border-radius: 14px;
     padding: 1rem;
-}
-
-/* ── Tabs ── */
-.stTabs [data-baseweb="tab-list"] { gap: 8px; }
-.stTabs [data-baseweb="tab"] {
-    border-radius: 8px 8px 0 0;
-    padding: 8px 16px;
-    font-weight: 600;
 }
 </style>
 """,
@@ -119,7 +110,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# PALABRAS CLAVE Y REGLAS DE NEGOCIO
+# FUNCIONES DE PROCESAMIENTO
 # ─────────────────────────────────────────────
 KEYWORDS_INGRESO = [
     "abono", "deposito", "depositos", "recibido", "credito",
@@ -301,42 +292,19 @@ def generar_pdf_reporte(
 
     styles = getSampleStyleSheet()
     s_title = ParagraphStyle(
-        "DocTitle",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=20,
-        leading=24,
-        textColor=c_navy,
+        "DocTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=c_navy
     )
     s_subtitle = ParagraphStyle(
-        "DocSubtitle",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=10,
-        leading=14,
-        textColor=colors.HexColor("#64748B"),
+        "DocSubtitle", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#64748B")
     )
     s_h2 = ParagraphStyle(
-        "SectionH2",
-        parent=styles["Normal"],
-        fontName="Helvetica-Bold",
-        fontSize=13,
-        leading=17,
-        textColor=c_blue,
-        spaceBefore=14,
-        spaceAfter=6,
+        "SectionH2", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=c_blue, spaceBefore=14, spaceAfter=6
     )
     s_body = ParagraphStyle(
-        "Body",
-        parent=styles["Normal"],
-        fontName="Helvetica",
-        fontSize=9,
-        leading=13,
-        textColor=c_dark,
+        "Body", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=c_dark
     )
 
     story = []
-
     story.append(Paragraph("AUDITSAAS — INFORME EJECUTIVO", s_title))
     story.append(
         Paragraph(
@@ -350,22 +318,10 @@ def generar_pdf_reporte(
     story.append(Paragraph("1. RESUMEN DE SALUD FINANCIERA", s_h2))
     kpi_data = [
         [
-            Paragraph(
-                f"<b>TOTAL INGRESOS</b><br/><font size=12 color='{c_green}'>${ingresos:,.2f}</font>",
-                s_body,
-            ),
-            Paragraph(
-                f"<b>TOTAL EGRESOS</b><br/><font size=12 color='{c_red}'>${egresos:,.2f}</font>",
-                s_body,
-            ),
-            Paragraph(
-                f"<b>UTILIDAD NETA</b><br/><font size=12 color='{c_blue}'>${utilidad:,.2f}</font>",
-                s_body,
-            ),
-            Paragraph(
-                f"<b>MARGEN NETO</b><br/><font size=12 color='{c_navy}'>{margen:.1f}%</font>",
-                s_body,
-            ),
+            Paragraph(f"<b>TOTAL INGRESOS</b><br/><font size=12 color='{c_green}'>${ingresos:,.2f}</font>", s_body),
+            Paragraph(f"<b>TOTAL EGRESOS</b><br/><font size=12 color='{c_red}'>${egresos:,.2f}</font>", s_body),
+            Paragraph(f"<b>UTILIDAD NETA</b><br/><font size=12 color='{c_blue}'>${utilidad:,.2f}</font>", s_body),
+            Paragraph(f"<b>MARGEN NETO</b><br/><font size=12 color='{c_navy}'>{margen:.1f}%</font>", s_body),
         ]
     ]
     t_kpi = Table(kpi_data, colWidths=[4.2 * cm] * 4)
@@ -402,17 +358,7 @@ def generar_pdf_reporte(
                 str(r.get("Tipo", "")),
                 str(r.get("Estado", "")),
             ])
-        t_tx = Table(
-            t_rows,
-            colWidths=[
-                2 * cm,
-                2.2 * cm,
-                6.5 * cm,
-                2.5 * cm,
-                2 * cm,
-                2.2 * cm,
-            ],
-        )
+        t_tx = Table(t_rows, colWidths=[2 * cm, 2.2 * cm, 6.5 * cm, 2.5 * cm, 2 * cm, 2.2 * cm])
         t_tx.setStyle(
             TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), c_navy),
@@ -427,18 +373,7 @@ def generar_pdf_reporte(
         )
         story.append(t_tx)
     else:
-        story.append(
-            Paragraph("No se registraron transacciones detalladas.", s_body)
-        )
-
-    story.append(Spacer(1, 16))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#E2E8F0"), spaceAfter=8))
-    story.append(
-        Paragraph(
-            "<b>AuditSaaS Intelligence</b> — Informe generado de forma confidencial.",
-            s_subtitle,
-        )
-    )
+        story.append(Paragraph("No se registraron transacciones detalladas.", s_body))
 
     doc.build(story)
     buffer.seek(0)
@@ -446,7 +381,7 @@ def generar_pdf_reporte(
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR / CONFIGURACIÓN DE PARÁMETROS
+# MENU LATERAL IZQUIERDO (CONTROLES ACTIVOS)
 # ─────────────────────────────────────────────
 st.sidebar.markdown("### ⚙️ Parámetros de Auditoría")
 empresa_input = st.sidebar.text_input("Nombre de la Empresa", value="Mi PyME S.A. de C.V.")
@@ -459,7 +394,13 @@ umbral_egreso = st.sidebar.number_input(
 )
 alertar_duplicados = st.sidebar.checkbox("Detectar Montos Duplicados", value=True)
 
-# BOTÓN DE WHATSAPP CON TU NÚMERO
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔍 Filtro de Movimientos")
+filtro_tipo = st.sidebar.selectbox(
+    "Mostrar en la vista de tabla:",
+    ["Todos", "Solo Ingresos", "Solo Egresos"]
+)
+
 NUMERO_WHATSAPP = "528121106491"
 MENSAJE_WHATSAPP = "Hola, utilicé la app de Auditoría Bancaria y me gustaría solicitar una consulta personalizada."
 url_whatsapp = f"https://wa.me/{NUMERO_WHATSAPP}?text={MENSAJE_WHATSAPP.replace(' ', '%20')}"
@@ -519,12 +460,11 @@ st.markdown(
 
 
 # ─────────────────────────────────────────────
-# CARGA DE ARCHIVO
+# CARGA Y PROCESAMIENTO
 # ─────────────────────────────────────────────
 uploaded_file = st.file_uploader(
     "📄 Arrastra tu estado de cuenta (PDF, Excel o Imagen) para iniciar el análisis",
     type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"],
-    help="Soporta PDFs digitales, estados de cuenta escaneados (OCR) y archivos Excel.",
 )
 
 if uploaded_file is not None:
@@ -535,13 +475,11 @@ if uploaded_file is not None:
     bytes_archivo_original = uploaded_file.read()
     uploaded_file.seek(0)
 
-    with st.spinner("🔍 Analizando estructura del documento..."):
+    with st.spinner("🔍 Analizando datos del documento..."):
         if ext == "pdf":
             df_tx, es_escaneado = extraer_transacciones_pdf(uploaded_file)
             if es_escaneado:
-                st.warning(
-                    "⚠️ El PDF parece ser un archivo escaneado (imagen). Ejecutando motor OCR..."
-                )
+                st.warning("⚠️ Documento escaneado detectado. Procesando vía OCR...")
                 uploaded_file.seek(0)
                 df_tx, pdf_digital = ocr_pdf_a_digital(bytes_archivo_original)
 
@@ -550,30 +488,17 @@ if uploaded_file is not None:
                 df_tx = pd.read_excel(uploaded_file)
                 if "Tipo" not in df_tx.columns and "Concepto" in df_tx.columns:
                     df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_concepto)
-                if "Monto" not in df_tx.columns:
-                    st.error("El archivo Excel no contiene una columna 'Monto'.")
             except Exception as e:
                 st.error(f"Error al leer el archivo Excel: {e}")
 
-    # ─────────────────────────────────────────────
-    # PROCESAMIENTO Y MÉTRICAS
-    # ─────────────────────────────────────────────
     if not df_tx.empty and "Monto" in df_tx.columns:
-        if "Tipo" in df_tx.columns:
-            ingresos_calc = float(
-                df_tx[df_tx["Tipo"] == "Ingreso"]["Monto"].sum()
-            )
-            egresos_calc = float(df_tx[df_tx["Tipo"] == "Egreso"]["Monto"].sum())
-        else:
-            ingresos_calc = float(df_tx["Monto"].sum())
-            egresos_calc = 0.0
-
+        ingresos_calc = float(df_tx[df_tx["Tipo"] == "Ingreso"]["Monto"].sum()) if "Tipo" in df_tx.columns else float(df_tx["Monto"].sum())
+        egresos_calc = float(df_tx[df_tx["Tipo"] == "Egreso"]["Monto"].sum()) if "Tipo" in df_tx.columns else 0.0
         util_neta = ingresos_calc - egresos_calc
-        margen_calc = (
-            (util_neta / ingresos_calc * 100) if ingresos_calc > 0 else 0.0
-        )
+        margen_calc = ((util_neta / ingresos_calc) * 100) if ingresos_calc > 0 else 0.0
         conteo_calc = len(df_tx)
 
+        # EVALUACIÓN DE REGLAS DE NEGOCIO SEGÚN PARÁMETROS LATERALES
         hallazgos = []
         if egresos_calc > ingresos_calc:
             hallazgos.append(
@@ -584,22 +509,25 @@ if uploaded_file is not None:
                 f"<b>Salud Financiera Positiva:</b> Margen neto del {margen_calc:.1f}% con una utilidad de ${util_neta:,.2f}."
             )
 
+        # Lógica del umbral ingresado en Sidebar
         egresos_altos = df_tx[
             (df_tx["Tipo"] == "Egreso") & (df_tx["Monto"] >= umbral_egreso)
         ]
         if not egresos_altos.empty:
             hallazgos.append(
-                f"<b>Egresos Elevados:</b> Se detectaron {len(egresos_altos)} movimientos de egreso iguales o superiores al umbral de ${umbral_egreso:,.2f}."
+                f"<b>Egresos Elevados:</b> Se identificaron {len(egresos_altos)} movimientos superiores al umbral de ${umbral_egreso:,.2f}."
             )
 
+        # Lógica del checkbox de duplicados en Sidebar
+        dups = pd.DataFrame()
         if alertar_duplicados:
             dups = df_tx[df_tx.duplicated(subset=["Monto", "Tipo"], keep=False)]
             if not dups.empty:
                 hallazgos.append(
-                    f"<b>Posibles Duplicados:</b> Se identificaron {len(dups)} transacciones con montos idénticos."
+                    f"<b>Detección de Duplicados:</b> Se encontraron {len(dups)} transacciones con montos idénticos."
                 )
 
-        # ── TARJETAS DE MÉTRICAS (KPIs) ──
+        # TARJETAS DE MÉTRICAS (KPIs)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Ingresos", f"${ingresos_calc:,.2f}")
         m2.metric("Total Egresos", f"${egresos_calc:,.2f}")
@@ -608,7 +536,7 @@ if uploaded_file is not None:
 
         st.markdown("<br/>", unsafe_allow_html=True)
 
-        # ── PESTAÑAS DE CONTENIDO ──
+        # PESTAÑAS DE TRABAJO
         tab_tx, tab_pdf, tab_audit, tab_export = st.tabs([
             "📋 Transacciones Extraídas",
             "📄 Reporte PDF Ejecutivo",
@@ -616,15 +544,20 @@ if uploaded_file is not None:
             "📥 Conversión & Exportar a Excel",
         ])
 
+        # FILTRADO DE LA TABLA SEGÚN EL SIDEBAR
+        df_mostrar = df_tx.copy()
+        if filtro_tipo == "Solo Ingresos":
+            df_mostrar = df_mostrar[df_mostrar["Tipo"] == "Ingreso"]
+        elif filtro_tipo == "Solo Egresos":
+            df_mostrar = df_mostrar[df_mostrar["Tipo"] == "Egreso"]
+
         with tab_tx:
-            st.markdown("##### 🔍 Detalle de Movimientos Identificados")
-            st.dataframe(df_tx, use_container_width=True, height=380)
+            st.markdown(f"##### 🔍 Movimientos Registrados ({filtro_tipo})")
+            st.dataframe(df_mostrar, use_container_width=True, height=380)
 
         with tab_pdf:
-            st.markdown("##### 📄 Reporte Formal para Dirección / Cliente")
-            st.info(
-                "Genera un informe institucional en PDF con branding profesional, semáforo de salud financiera y tabla analítica."
-            )
+            st.markdown("##### 📄 Generar Informe Oficial")
+            st.info(f"El reporte incluirá la carátula con la empresa: **{empresa_input}** y período: **{periodo_input}**.")
 
             pdf_bytes_report = generar_pdf_reporte(
                 empresa=empresa_input,
@@ -640,12 +573,12 @@ if uploaded_file is not None:
             st.download_button(
                 "📥 Descargar Reporte Ejecutivo en PDF",
                 data=pdf_bytes_report,
-                file_name=f"AuditSaaS_Reporte_{empresa_input.replace(' ', '_')}_{date.today().strftime('%Y%m%d')}.pdf",
+                file_name=f"Reporte_{empresa_input.replace(' ', '_')}_{date.today().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
             )
 
         with tab_audit:
-            st.markdown("##### 🛡️ Análisis de Inconsistencias y Alertas")
+            st.markdown("##### 🛡️ Diagnóstico Anti-Fraude Activo")
             for h in hallazgos:
                 if "Crítica" in h or "Elevados" in h:
                     st.error(h)
@@ -653,26 +586,27 @@ if uploaded_file is not None:
                     st.success(h)
 
             if not egresos_altos.empty:
-                st.markdown("<h6>Egresos sobre el umbral configurado:</h6>", unsafe_allow_html=True)
+                st.markdown(f"<h6>Movimientos superiores a ${umbral_egreso:,.2f}:</h6>", unsafe_allow_html=True)
                 st.dataframe(egresos_altos, use_container_width=True)
 
-        # ── PESTAÑA 4: CONVERSIÓN FUNCIONAL ──
+            if alertar_duplicados and not dups.empty:
+                st.markdown("<h6>Transacciones con montos duplicados:</h6>", unsafe_allow_html=True)
+                st.dataframe(dups, use_container_width=True)
+
         with tab_export:
             st.markdown("##### 📊 Conversión de Archivos y Exportación")
             
             col_ex1, col_ex2 = st.columns(2)
             
             with col_ex1:
-                st.markdown("###### 1. Convertir Estado de Cuenta (PDF/Imagen) a Excel")
-                st.write("Genera un libro interactivo `.xlsx` estructurado a partir del documento PDF cargado.")
-                
+                st.markdown("###### 1. Convertir Estado de Cuenta (PDF) a Excel")
                 excel_buf = BytesIO()
                 with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
                     df_tx.to_excel(writer, index=False, sheet_name="Transacciones")
                     resumen = pd.DataFrame(
                         {
-                            "Indicador": ["Ingresos", "Egresos", "Utilidad Neta", "Margen Neto", "Transacciones"],
-                            "Valor": [ingresos_calc, egresos_calc, util_neta, f"{margen_calc:.1f}%", conteo_calc],
+                            "Indicador": ["Empresa", "Período", "Ingresos", "Egresos", "Utilidad Neta", "Margen Neto", "Transacciones"],
+                            "Valor": [empresa_input, periodo_input, ingresos_calc, egresos_calc, util_neta, f"{margen_calc:.1f}%", conteo_calc],
                         }
                     )
                     resumen.to_excel(writer, index=False, sheet_name="Resumen")
@@ -681,31 +615,29 @@ if uploaded_file is not None:
                 st.download_button(
                     "📥 Descargar PDF Convertido a Excel (.xlsx)",
                     data=excel_buf,
-                    file_name=f"Estado_de_Cuenta_{empresa_input.replace(' ', '_')}.xlsx",
+                    file_name=f"Estado_Cuenta_{empresa_input.replace(' ', '_')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True,
                 )
 
             with col_ex2:
-                st.markdown("###### 2. Digitalizar PDF Escaneado / Imagen a PDF Digital")
+                st.markdown("###### 2. Digitalizar PDF Escaneado / Imagen")
                 if pdf_digital:
-                    st.success("✅ Documento escaneado procesado con motor OCR correctamente.")
+                    st.success("✅ PDF escaneado digitalizado con OCR.")
                     st.download_button(
                         "📥 Descargar PDF Digitalizado (OCR)",
                         data=pdf_digital,
-                        file_name=f"AuditSaaS_Digital_{date.today().strftime('%Y%m%d')}.pdf",
+                        file_name=f"AuditSaaS_OCR_{date.today().strftime('%Y%m%d')}.pdf",
                         mime="application/pdf",
                         use_container_width=True,
                     )
                 elif ext == "pdf" and not es_escaneado:
-                    st.info("ℹ️ Tu PDF ya posee texto vectorial seleccionable. No requiere conversión OCR.")
+                    st.info("ℹ️ Tu PDF es nativo digital (texto seleccionable). No requiere OCR.")
                 else:
-                    st.info("ℹ️ Carga un PDF o imagen escaneada para habilitar la digitalización OCR.")
+                    st.info("ℹ️ Sube una imagen o PDF escaneado para procesarlo por OCR.")
 
     else:
-        st.warning(
-            "⚠️ No se encontraron tablas ni datos legibles de transacciones en el archivo cargado."
-        )
+        st.warning("⚠️ No se identificaron transacciones válidas en el documento cargado.")
 
 else:
-    st.info("👆 Por favor sube un estado de cuenta en formato PDF o Excel para comenzar el proceso de auditoría y conversión.")
+    st.info("👆 Carga un estado de cuenta en el panel central para iniciar el proceso de auditoría y análisis.")
