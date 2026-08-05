@@ -98,7 +98,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# MOTOR DE EXTRACCIÓN Y LECTURA DE PDF BLINDADO CONTRA TOTALES Y SALDOS
+# MOTOR DE EXTRACCIÓN Y LECTURA DE PDF BLINDADO
 # ─────────────────────────────────────────────
 KEYWORDS_INGRESO = [
     "spei recibido", "deposito", "depositos", "abono", "abonos", "recibido", 
@@ -327,7 +327,6 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool, bytes | Non
 
     return df, es_escaneado, pdf_digital_bytes
 
-
 # ─────────────────────────────────────────────
 # BARRA LATERAL (CONFIGURACIÓN Y DATOS)
 # ─────────────────────────────────────────────
@@ -351,7 +350,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### ⚙️ Panel de Control")
     umbral_alerta = st.slider("Umbral de Gasto Anómalo ($)", 5000, 100000, 20000, step=5000)
-
 
 # ─────────────────────────────────────────────
 # CUERPO PRINCIPAL DE LA APLICACIÓN
@@ -464,4 +462,4 @@ if not df_transacciones.empty:
             st.info("ℹ️ Sube una imagen o PDF escaneado para procesarlo por OCR.")
 
 else:
-    st.warning("⚠️ No se identificaron transacciones válidas en el documento cargado.")
+    st.info("👆 Carga un estado de cuenta en el panel central para iniciar el proceso de auditoría y análisis.")
