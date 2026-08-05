@@ -1,16 +1,22 @@
-import re
-from datetime import date
-from io import BytesIO
-
-import numpy as np
+import streamlit as st
 import pandas as pd
 import pdfplumber
-import streamlit as st
+import re
+from io import BytesIO
+from datetime import date
+
+from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, letter
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    HRFlowable,
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 try:
     import pytesseract
@@ -24,529 +30,750 @@ except ImportError:
 # CONFIGURACIÓN DE PÁGINA
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="AuditSaaS — Auditor Financiero Express",
+    page_title="AuditSaaS — Auditor Financiero para PyMEs",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ─────────────────────────────────────────────
-# ESTILOS CSS PERSONALIZADOS (DISEÑO PREMIUM)
+# ESTILOS CSS PROFESIONALES
 # ─────────────────────────────────────────────
 st.markdown(
     """
 <style>
-/* ── Globals ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 #MainMenu, footer { visibility: hidden; }
 
-/* ── Sidebar ── */
+/* Sidebar */
 [data-testid="stSidebar"] {
-    background: linear-gradient(160deg, #1e293b 0%, #0f172a 100%);
+    background: linear-gradient(160deg, #0F172A 0%, #1E3A8A 100%) !important;
+}
+[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
+[data-testid="stSidebar"] .stSelectbox label,
+[data-testid="stSidebar"] .stNumberInput label,
+[data-testid="stSidebar"] .stTextInput label {
+    color: #93C5FD !important;
+    font-weight: 600;
+}
+
+/* Metric Cards */
+[data-testid="stMetric"] {
+    background: white;
+    border-radius: 14px;
+    padding: 1.2rem 1.4rem;
+    box-shadow: 0 2px 8px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+    border: 1px solid #E2E8F0;
+    border-top: 4px solid #2563EB;
+}
+[data-testid="stMetricLabel"] {
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    color: #64748B !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+[data-testid="stMetricValue"] {
+    font-size: 1.65rem !important;
+    font-weight: 700 !important;
+    color: #0F172A !important;
+}
+
+/* Botones */
+.stDownloadButton > button {
+    background: linear-gradient(135deg, #1E3A8A 0%, #2563EB 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 0.65rem 1.4rem !important;
+    font-weight: 600 !important;
+    font-size: 0.92rem !important;
+    box-shadow: 0 4px 12px rgba(37,99,235,0.2) !important;
+    transition: all 0.2s ease !important;
+}
+.stDownloadButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 16px rgba(37,99,235,0.3) !important;
+}
+
+/* Uploader */
+[data-testid="stFileUploader"] {
+    background: #F8FAFC;
+    border: 2px dashed #CBD5E1;
+    border-radius: 14px;
+    padding: 1rem;
 }
 </style>
 """,
     unsafe_allow_html=True,
 )
-[data-testid="stSidebar"] stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stText {
-    color: #f8fafc !important;
-}
-
-/* Metric Cards */
-.metric-card {
-    background: #ffffff;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
-    border: 1px solid #e2e8f0;
-    text-align: center;
-}
-.metric-title { font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin-bottom: 6px; }
-.metric-val-ingreso { font-size: 1.8rem; font-weight: 700; color: #10b981; }
-.metric-val-egreso { font-size: 1.8rem; font-weight: 700; color: #ef4444; }
-.metric-val-neto { font-size: 1.8rem; font-weight: 700; color: #3b82f6; }
-.metric-val-count { font-size: 1.8rem; font-weight: 700; color: #8b5cf6; }
-
-/* WhatsApp Custom Button */
-.wa-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    background-color: #25D366;
-    color: white !important;
-    font-weight: 600;
-    padding: 12px 16px;
-    border-radius: 8px;
-    text-decoration: none;
-    margin-top: 15px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
-    transition: all 0.2s ease;
-}
-.wa-btn:hover { background-color: #1da851; color: white !important; }
-</style>
-""",
-    unsafe_allow_allowed=True if hasattr(st, "style") else True,
-)
-
 
 # ─────────────────────────────────────────────
-# MOTOR DE EXTRACCIÓN AVANZADA DE MOVIMIENTOS
+# FUNCIONES DE PROCESAMIENTO REFORZADAS
 # ─────────────────────────────────────────────
-def extraer_movimientos_pdf(file_bytes):
-    """Extrae detalladamente cada movimiento con su Fecha, Concepto, Monto y Tipo (Ingreso/Egreso).
+KEYWORDS_INGRESO = [
+    "abono", "deposito", "depositos", "recibido", "credito",
+    "transferencia recibida", "ingreso", "intereses ganados",
+    "spei recibido", "nomm", "factura", "cobro", "venta", "deposito en efectivo"
+]
+KEYWORDS_EGRESO = [
+    "cargo", "retiro", "pago", "compra", "comision", "iva",
+    "spei enviado", "debito", "cheque", "egreso", "disposicion",
+    "impuesto", "isr", "comision por", "mantenimiento", "gasto", "disposicion"
+]
 
-    Ignora líneas de saldos generales, totales de periodo y encabezados.
+def clasificar_concepto(texto: str) -> str:
+    t = texto.lower()
+    if any(k in t for k in KEYWORDS_INGRESO):
+        return "Ingreso"
+    if any(k in t for k in KEYWORDS_EGRESO):
+        return "Egreso"
+    return "Egreso"
+
+def parsear_lineas_texto(text: str, origen: str) -> list:
     """
-    movimientos = []
+    Parsea texto extraído mediante expresiones regulares multitipo para capturar
+    fechas complejas, descripciones largas e importes de ingresos o egresos.
+    """
+    rows = []
+    lines = text.split("\n")
+    
+    # Patrón 1: Captura Fechas (DD/MM/AAAA, DD-MMM-YY, etc.), Concepto y Monto
+    pattern_std = re.compile(
+        r"^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3}(?:\s+\d{2,4})?)\s+(.*?)\s+[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2}))",
+        re.IGNORECASE
+    )
+    # Patrón 2: Captura Fechas al inicio, concepto y dos columnas numéricas (Retiro / Depósito)
+    pattern_dos_monto = re.compile(
+        r"^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3})\s+(.*?)\s+[\$]?\s*([0-9,]+\.[0-9]{2})\s+[\$]?\s*([0-9,]+\.[0-9]{2})",
+        re.IGNORECASE
+    )
 
-    # Expresiones regulares para fechas comunes en estados de cuenta (01/JAN, 15/08/2023, 01-12-2024, etc.)
-    regex_fecha = r"\b(\d{1,2}[\/\-](?:\d{1,2}|[A-Za-z]{3})(?:[\/\-]\d{2,4})?)\b"
-    # Expresión para montos monetarios ($1,234.56 o 1,234.56)
-    regex_monto = r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})"
-
-    # Palabras clave a EXCLUIR (saldos, resumidos del periodo, totales generales)
-    palabras_excluir = [
-        "SALDO ANTERIOR",
-        "SALDO FINAL",
-        "SALDO PROMEDIO",
-        "TOTAL DE DEPOSITOS",
-        "TOTAL DE RETIROS",
-        "MONTO TOTAL DEL PERIODO",
-        "SALDO INICIAL",
-        "TOTAL CARGOS",
-        "TOTAL ABONOS",
-        "RESUMEN DE CUENTA",
-        "MONTO TOTAL",
-    ]
-
-    with pdfplumber.open(BytesIO(file_bytes)) as pdf:
-        for num_pagina, pagina in enumerate(pdf.pages):
-            texto = pagina.extract_text()
-            if not texto:
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+            
+        m_dos = pattern_dos_monto.search(line_clean)
+        if m_dos:
+            fecha, concepto, col1, col2 = m_dos.groups()
+            try:
+                v1 = float(col1.replace(",", ""))
+                v2 = float(col2.replace(",", ""))
+                if v1 > 0:
+                    rows.append({
+                        "Origen": origen,
+                        "Fecha": fecha.strip(),
+                        "Concepto": concepto.strip(),
+                        "Monto": v1,
+                        "Tipo": "Egreso",
+                        "Estado": "Normal",
+                    })
+                if v2 > 0:
+                    rows.append({
+                        "Origen": origen,
+                        "Fecha": fecha.strip(),
+                        "Concepto": concepto.strip(),
+                        "Monto": v2,
+                        "Tipo": "Ingreso",
+                        "Estado": "Normal",
+                    })
                 continue
+            except ValueError:
+                pass
 
-            lineas = texto.split("\n")
-            for linea in lineas:
-                linea_upper = linea.upper()
+        m_std = pattern_std.search(line_clean)
+        if m_std:
+            fecha, concepto, monto_str = m_std.groups()
+            try:
+                monto = float(monto_str.replace(",", ""))
+                if monto > 0:
+                    tipo = clasificar_concepto(concepto)
+                    rows.append({
+                        "Origen": origen,
+                        "Fecha": fecha.strip(),
+                        "Concepto": concepto.strip(),
+                        "Monto": monto,
+                        "Tipo": tipo,
+                        "Estado": "Normal",
+                    })
+            except ValueError:
+                pass
+    return rows
 
-                # 1. Ignorar si la línea contiene frases de saldos o totales del periodo
-                if any(p in linea_upper for p in palabras_excluir):
+def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
+    """
+    Extrae transacciones bancarias utilizando análisis estructurado de tablas de pdfplumber 
+    combinado con la detección por posición de columnas (Cargos vs Abonos).
+    """
+    rows = []
+    es_escaneado = False
+    pdf_bytes = file_pdf.read()
+
+    # Regex genérico para fechas
+    regex_fecha = re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3})", re.IGNORECASE)
+    # Regex para extraer montos válidos
+    regex_monto = re.compile(r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})")
+
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        texto_total = ""
+        for i, page in enumerate(pdf.pages, 1):
+            txt = page.extract_text() or ""
+            texto_total += txt
+
+            # Intentar extracción mediante estructuración de tablas
+            tables = page.extract_tables()
+            lineas_procesadas = 0
+
+            for tbl in tables:
+                if not tbl:
                     continue
+                
+                # Detectar encabezados para asignar columnas de Ingreso/Egreso/Fecha/Concepto
+                idx_fecha, idx_concepto, idx_egreso, idx_ingreso, idx_monto = -1, -1, -1, -1, -1
+                
+                header = [str(c).lower() if c else "" for c in tbl[0]]
+                for idx, col in enumerate(header):
+                    if any(k in col for k in ["fecha", "fec"]):
+                        idx_fecha = idx
+                    elif any(k in col for k in ["concepto", "descripcion", "detalle", "movimiento"]):
+                        idx_concepto = idx
+                    elif any(k in col for k in ["cargo", "retiro", "egreso", "debito"]):
+                        idx_egreso = idx
+                    elif any(k in col for k in ["abono", "deposito", "ingreso", "credito"]):
+                        idx_ingreso = idx
+                    elif any(k in col for k in ["monto", "importe"]):
+                        idx_monto = idx
 
-                # 2. Buscar si la línea tiene una Fecha
-                match_fecha = re.search(regex_fecha, linea)
-                if not match_fecha:
-                    continue
+                for row in tbl:
+                    if not row:
+                        continue
+                    rc = [str(c).replace("\n", " ").strip() for c in row if c is not None]
+                    if len(rc) < 2:
+                        continue
+                    
+                    # Evitar procesar encabezados nuevamente
+                    linea_texto = " ".join(rc).lower()
+                    if "saldo" in linea_texto and ("concepto" in linea_texto or "fecha" in linea_texto):
+                        continue
 
-                fecha_encontrada = match_fecha.group(1)
+                    fecha_val = "N/A"
+                    concepto_val = "Movimiento"
 
-                # 3. Buscar todos los montos en la línea
-                montos = re.findall(regex_monto, linea)
-                if not montos:
-                    continue
-
-                # Convertir montos a flotantes
-                valores_monto = []
-                for m in montos:
-                    try:
-                        val = float(m.replace(",", ""))
-                        if val > 0:
-                            valores_monto.append(val)
-                    except ValueError:
-                        pass
-
-                if not valores_monto:
-                    continue
-
-                # Usualmente en una línea de transacción el monto principal es el primero o el único
-                # (si hay dos, el segundo suele ser el saldo posterior, nos quedamos con el primero)
-                monto_tx = valores_monto[0]
-
-                # 4. Determinar si es Ingreso o Egreso segun palabras clave en la descripción
-                es_ingreso = False
-                palabras_ingreso = [
-                    "ABONO",
-                    "DEPOSITO",
-                    "TRANSFERENCIA RECIBIDA",
-                    "SPEI RECIBIDO",
-                    "DEPOSIT",
-                    "NOMA",
-                    "INTERES A FAVOR",
-                    "DEVOLUCION",
-                ]
-                palabras_egreso = [
-                    "RETIRO",
-                    "CARGO",
-                    "PAGO",
-                    "COMPRA",
-                    "COMISION",
-                    "IVA",
-                    "CHEQUE",
-                    "SPEI ENVIADO",
-                    "DISPERSION",
-                ]
-
-                if any(p in linea_upper for p in palabras_ingreso):
-                    es_ingreso = True
-                elif any(p in linea_upper for p in palabras_egreso):
-                    es_ingreso = False
-                else:
-                    # Si la línea tiene signo '-' o palabra DEBIT/CREDIT
-                    if "-" in linea or "CARGO" in linea_upper:
-                        es_ingreso = False
+                    # Asignación inteligente según encabezados o posición de índices
+                    if idx_fecha != -1 and idx_fecha < len(rc) and regex_fecha.search(rc[idx_fecha]):
+                        fecha_val = rc[idx_fecha]
                     else:
-                        # Por defecto si no coincide con egreso explicito
-                        es_ingreso = True
+                        for cell in rc:
+                            m_f = regex_fecha.search(cell)
+                            if m_f:
+                                fecha_val = m_f.group(1)
+                                break
 
-                # Limpieza de concepto / descripción
-                concepto = linea
-                # Remover la fecha y montos del texto para dejar un concepto limpio
-                concepto = re.sub(regex_fecha, "", concepto)
-                for m in montos:
-                    concepto = concepto.replace(m, "")
-                concepto = re.sub(r"[\$\,\-]", "", concepto).strip()
-                if not concepto:
-                    concepto = "Movimiento Bancario"
+                    if idx_concepto != -1 and idx_concepto < len(rc):
+                        concepto_val = rc[idx_concepto]
+                    else:
+                        for cell in rc:
+                            if not regex_fecha.search(cell) and not regex_monto.search(cell) and len(cell) > 3:
+                                concepto_val = cell
+                                break
 
-                # Guardar el registro completo
-                movimientos.append(
-                    {
-                        "Fecha": fecha_encontrada,
-                        "Concepto": concepto[:60],  # Limitar largo de texto
-                        "Monto ($)": monto_tx,
-                        "Tipo": "Ingreso" if es_ingreso else "Egreso",
-                        "Categoría": "Operativo",
-                    }
-                )
+                    # Procesar importes por columnas específicas
+                    agregado = False
+                    if idx_egreso != -1 and idx_egreso < len(rc):
+                        m_eg = regex_monto.search(rc[idx_egreso])
+                        if m_eg:
+                            try:
+                                val = float(m_eg.group(1).replace(",", ""))
+                                if val > 0:
+                                    rows.append({
+                                        "Origen": f"Pág.{i}",
+                                        "Fecha": fecha_val,
+                                        "Concepto": concepto_val,
+                                        "Monto": val,
+                                        "Tipo": "Egreso",
+                                        "Estado": "Normal",
+                                    })
+                                    agregado = True
+                            except ValueError:
+                                pass
 
-    # Convertir a DataFrame
-    if movimientos:
-        df = pd.DataFrame(movimientos)
-    else:
-        # Fallback de estructura si no hay datos
-        df = pd.DataFrame(
-            columns=["Fecha", "Concepto", "Monto ($)", "Tipo", "Categoría"]
+                    if idx_ingreso != -1 and idx_ingreso < len(rc):
+                        m_in = regex_monto.search(rc[idx_ingreso])
+                        if m_in:
+                            try:
+                                val = float(m_in.group(1).replace(",", ""))
+                                if val > 0:
+                                    rows.append({
+                                        "Origen": f"Pág.{i}",
+                                        "Fecha": fecha_val,
+                                        "Concepto": concepto_val,
+                                        "Monto": val,
+                                        "Tipo": "Ingreso",
+                                        "Estado": "Normal",
+                                    })
+                                    agregado = True
+                            except ValueError:
+                                pass
+
+                    # En caso de que no haya columnas explícitas de Ingreso/Egreso
+                    if not agregado:
+                        for cell in rc:
+                            m = regex_monto.search(cell)
+                            if m:
+                                try:
+                                    v = float(m.group(1).replace(",", ""))
+                                    if v > 0:
+                                        tipo = clasificar_concepto(" ".join(rc))
+                                        rows.append({
+                                            "Origen": f"Pág.{i}",
+                                            "Fecha": fecha_val,
+                                            "Concepto": concepto_val,
+                                            "Monto": v,
+                                            "Tipo": tipo,
+                                            "Estado": "Normal",
+                                        })
+                                        break
+                                except ValueError:
+                                    pass
+
+                    lineas_procesadas += 1
+
+            # Si la tabla falló o no capturó datos, recurrir al parseo estructurado de texto
+            if len(rows) == 0 and txt.strip():
+                rows.extend(parsear_lineas_texto(txt, f"Pág.{i}"))
+
+        if len(texto_total.strip()) < 50 and len(rows) == 0:
+            es_escaneado = True
+
+    df = (
+        pd.DataFrame(rows)
+        if rows
+        else pd.DataFrame(
+            columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"]
         )
+    )
 
-    return df
+    if not df.empty:
+        df["Estado"] = "Normal"
+        p95 = df["Monto"].quantile(0.95) if len(df) > 5 else 999999
+        df.loc[
+            (df["Monto"] > p95) & (df["Tipo"] == "Egreso"), "Estado"
+        ] = "⚠️ Inconsistencia"
 
+    return df, es_escaneado
 
-# ─────────────────────────────────────────────
-# GENERADOR DE REPORTE PDF EJECUTIVO
-# ─────────────────────────────────────────────
-def generar_pdf_reporte(df_tx, ingresos, egresos, utilidad):
+def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
+    if not OCR_DISPONIBLE:
+        return pd.DataFrame(), b""
+
+    images = convert_from_bytes(pdf_bytes)
+    all_text = ""
+    rows = []
+
+    for idx, img in enumerate(images, 1):
+        txt = pytesseract.image_to_string(img, lang="spa+eng")
+        all_text += f"\n--- Página {idx} ---\n" + txt
+        rows.extend(parsear_lineas_texto(txt, f"OCR Pág.{idx}"))
+
+    df = (
+        pd.DataFrame(rows)
+        if rows
+        else pd.DataFrame(
+            columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"]
+        )
+    )
+
+    buffer_out = BytesIO()
+    doc = SimpleDocTemplate(buffer_out, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = [
+        Paragraph("Estado de Cuenta — Digitalizado vía OCR", styles["Heading1"]),
+        Spacer(1, 12),
+        Paragraph(all_text.replace("\n", "<br/>"), styles["BodyText"]),
+    ]
+    doc.build(story)
+    buffer_out.seek(0)
+
+    return df, buffer_out.getvalue()
+
+def generar_pdf_reporte(
+    empresa: str,
+    periodo: str,
+    ingresos: float,
+    egresos: float,
+    utilidad: float,
+    margen: float,
+    df_tx: pd.DataFrame,
+    hallazgos: list,
+) -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buffer, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36
+        buffer,
+        pagesize=A4,
+        rightMargin=1.8 * cm,
+        leftMargin=1.8 * cm,
+        topMargin=2 * cm,
+        bottomMargin=2 * cm,
     )
+
+    c_navy = colors.HexColor("#0F172A")
+    c_blue = colors.HexColor("#1E3A8A")
+    c_accent = colors.HexColor("#2563EB")
+    c_light = colors.HexColor("#F8FAFC")
+    c_dark = colors.HexColor("#334155")
+    c_red = colors.HexColor("#DC2626")
+    c_green = colors.HexColor("#16A34A")
+
     styles = getSampleStyleSheet()
-
-    # Estilos
-    title_style = ParagraphStyle(
-        "TitleStyle", parent=styles["Heading1"], fontSize=20, leading=24, textColor=colors.HexColor("#1e293b")
+    s_title = ParagraphStyle(
+        "DocTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=c_navy
     )
-    sub_style = ParagraphStyle(
-        "SubStyle", parent=styles["Normal"], fontSize=10, textColor=colors.HexColor("#64748b")
+    s_subtitle = ParagraphStyle(
+        "DocSubtitle", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#64748B")
     )
-    table_header = ParagraphStyle(
-        "TH", fontName="Helvetica-Bold", fontSize=9, textColor=colors.white, alignment=1
+    s_h2 = ParagraphStyle(
+        "SectionH2", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=c_blue, spaceBefore=14, spaceAfter=6
     )
-    table_cell = ParagraphStyle("TC", fontName="Helvetica", fontSize=8, alignment=0)
+    s_body = ParagraphStyle(
+        "Body", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=c_dark
+    )
 
-    elements = []
-
-    # Encabezado
-    elements.append(Paragraph("<b>AuditSaaS — Reporte Financiero</b>", title_style))
-    elements.append(
+    story = []
+    story.append(Paragraph("AUDITSAAS — INFORME EJECUTIVO", s_title))
+    story.append(
         Paragraph(
-            f"Fecha de emisión: {date.today().strftime('%d/%m/%Y')} | Auditoría de Movimientos",
-            sub_style,
+            f"Empresa: <b>{empresa}</b> &nbsp;|&nbsp; Período: <b>{periodo}</b> &nbsp;|&nbsp; Emisión: {date.today().strftime('%d/%m/%Y')}",
+            s_subtitle,
         )
     )
-    elements.append(Spacer(1, 15))
-    elements.append(
-        HRFlowable(width="100%", thickness=1, color=colors.HexColor("#cbd5e1"))
-    )
-    elements.append(Spacer(1, 15))
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", thickness=2, color=c_accent, spaceAfter=14))
 
-    # Resumen Ejecutivo (Tabla de métricas)
-    resumen_data = [
+    story.append(Paragraph("1. RESUMEN DE SALUD FINANCIERA", s_h2))
+    kpi_data = [
         [
-            Paragraph("<b>Total Ingresos</b>", table_cell),
-            Paragraph("<b>Total Egresos</b>", table_cell),
-            Paragraph("<b>Margen Neto</b>", table_cell),
-        ],
-        [
-            f"${ingresos:,.2f}",
-            f"${egresos:,.2f}",
-            f"${utilidad:,.2f}",
-        ],
+            Paragraph(f"<b>TOTAL INGRESOS</b><br/><font size=12 color='{c_green}'>${ingresos:,.2f}</font>", s_body),
+            Paragraph(f"<b>TOTAL EGRESOS</b><br/><font size=12 color='{c_red}'>${egresos:,.2f}</font>", s_body),
+            Paragraph(f"<b>UTILIDAD NETA</b><br/><font size=12 color='{c_blue}'>${utilidad:,.2f}</font>", s_body),
+            Paragraph(f"<b>MARGEN NETO</b><br/><font size=12 color='{c_navy}'>{margen:.1f}%</font>", s_body),
+        ]
     ]
-    t_resumen = Table(resumen_data, colWidths=[6 * cm, 6 * cm, 6 * cm])
-    t_resumen.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
-                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#334155")),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 8),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-            ]
-        )
+    t_kpi = Table(kpi_data, colWidths=[4.2 * cm] * 4)
+    t_kpi.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), c_light),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ])
     )
-    elements.append(t_resumen)
-    elements.append(Spacer(1, 20))
+    story.append(t_kpi)
+    story.append(Spacer(1, 12))
 
-    # Tabla de Movimientos Detallados
-    elements.append(Paragraph("<b>Detalle de Movimientos Auditados</b>", title_style))
-    elements.append(Spacer(1, 10))
+    story.append(Paragraph("2. DIAGNÓSTICO FINANCIERO Y HALLAZGOS", s_h2))
+    for h in hallazgos:
+        story.append(Paragraph(f"• {h}", s_body))
+        story.append(Spacer(1, 3))
 
-    headers = [
-        Paragraph("Fecha", table_header),
-        Paragraph("Concepto", table_header),
-        Paragraph("Monto ($)", table_header),
-        Paragraph("Tipo", table_header),
-    ]
-    rows = [headers]
+    story.append(Spacer(1, 10))
 
-    for _, row in df_tx.iterrows():
-        rows.append(
-            [
-                Paragraph(str(row["Fecha"]), table_cell),
-                Paragraph(str(row["Concepto"]), table_cell),
-                Paragraph(f"${float(row['Monto ($)']):,.2f}", table_cell),
-                Paragraph(str(row["Tipo"]), table_cell),
-            ]
-        )
-
-    t_movs = Table(rows, colWidths=[3 * cm, 9 * cm, 3.5 * cm, 3 * cm])
-    t_movs.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e293b")),
+    story.append(Paragraph("3. MUESTRA DE TRANSACCIONES AUDITADAS", s_h2))
+    if not df_tx.empty:
+        tx_sub = df_tx.head(15)
+        t_rows = [["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"]]
+        for _, r in tx_sub.iterrows():
+            t_rows.append([
+                str(r.get("Origen", "")),
+                str(r.get("Fecha", "")),
+                str(r.get("Concepto", ""))[:30],
+                f"${r.get('Monto', 0):,.2f}",
+                str(r.get("Tipo", "")),
+                str(r.get("Estado", "")),
+            ])
+        t_tx = Table(t_rows, colWidths=[2 * cm, 2.2 * cm, 6.5 * cm, 2.5 * cm, 2 * cm, 2.2 * cm])
+        t_tx.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), c_navy),
                 ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("ALIGN", (2, 1), (2, -1), "RIGHT"),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, 0), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ])
         )
-    )
-    elements.append(t_movs)
+        story.append(t_tx)
+    else:
+        story.append(Paragraph("No se registraron transacciones detalladas.", s_body))
 
-    doc.build(elements)
+    doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 
 # ─────────────────────────────────────────────
-# BARRA LATERAL (SIDEBAR)
+# MENU LATERAL IZQUIERDO (CONTROLES ACTIVOS)
 # ─────────────────────────────────────────────
-with st.sidebar:
-    st.image(
-        "https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=60
-    )
-    st.title("AuditSaaS v2.5")
-    st.markdown("**Plataforma Profesional de Auditoría Bancaria**")
-    st.markdown("---")
+st.sidebar.markdown("### ⚙️ Parámetros de Auditoría")
+empresa_input = st.sidebar.text_input("Nombre de la Empresa", value="Mi PyME S.A. de C.V.")
+periodo_input = st.sidebar.text_input("Período Auditoría", value="Enero 2026")
 
-    st.subheader("📁 Cargar Estado de Cuenta")
-    uploaded_file = st.file_uploader(
-        "Sube un PDF bancario (BBVA, Banorte, Santander, Banamex, etc.)",
-        type=["pdf"],
-    )
-
-    st.markdown("---")
-    st.subheader("💬 Contacto y Soporte Directo")
-    st.markdown(
-        "¿Necesitas adaptar esta herramienta a tu empresa o agregar funciones personalizadas?"
-    )
-
-    # Botón directo de WhatsApp
-    num_wa = "528100000000"  # Reemplazar con tu número real de WhatsApp
-    msj_wa = "Hola, me interesa comercializar/personalizar AuditSaaS para mis clientes."
-    url_wa = f"https://wa.me/{num_wa}?text={msj_wa.replace(' ', '%20')}"
-
-    st.markdown(
-        f'<a href="{url_wa}" target="_blank" class="wa-btn">💬 Contactar por WhatsApp</a>',
-        unsafe_allow_html=True,
-    )
-
-
-# ─────────────────────────────────────────────
-# PANEL PRINCIPAL
-# ─────────────────────────────────────────────
-st.title("📊 Panel Ejecutivos de Auditoría Financiera")
-st.markdown(
-    "Analiza e identifica detalladamente **cada fecha, concepto, monto e ingreso/egreso** individual de tus estados de cuenta en segundos."
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🎯 Umbrales Anti-Fraude")
+umbral_egreso = st.sidebar.number_input(
+    "Alerta Egreso Mayor a ($)", value=25000.0, step=5000.0
 )
-st.markdown("---")
+alertar_duplicados = st.sidebar.checkbox("Detectar Montos Duplicados", value=True)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🔍 Filtro de Movimientos")
+filtro_tipo = st.sidebar.selectbox(
+    "Mostrar en la vista de tabla:",
+    ["Todos", "Solo Ingresos", "Solo Egresos"]
+)
+
+NUMERO_WHATSAPP = "528121106491"
+MENSAJE_WHATSAPP = "Hola, utilicé la app de Auditoría Bancaria y me gustaría solicitar una consulta personalizada."
+url_whatsapp = f"https://wa.me/{NUMERO_WHATSAPP}?text={MENSAJE_WHATSAPP.replace(' ', '%20')}"
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("💬 ¿Auditoría Personalizada?")
+st.sidebar.markdown(f'''
+    <a href="{url_whatsapp}" target="_blank" style="text-decoration: none;">
+        <button style="
+            background-color: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 15px;
+            text-align: center;
+            display: block;
+            font-size: 15px;
+            margin: 8px 0px;
+            cursor: pointer;
+            border-radius: 10px;
+            font-weight: bold;
+            width: 100%;
+            box-shadow: 0 4px 12px rgba(37,211,102,0.3);">
+            📲 Hablar por WhatsApp
+        </button>
+    </a>
+''', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# HEADER PRINCIPAL
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+<div style="
+    background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 60%, #2563EB 100%);
+    border-radius: 18px;
+    padding: 2.2rem 2.5rem;
+    margin-bottom: 2rem;
+    color: white;
+    box-shadow: 0 10px 25px -5px rgba(30, 58, 138, 0.3);
+">
+    <div style="display: flex; align-items: center; gap: 1.2rem;">
+        <div style="font-size: 3rem; background: rgba(255,255,255,0.1); padding: 0.5rem 0.8rem; border-radius: 14px;">📊</div>
+        <div>
+            <h1 style="margin: 0; font-size: 2rem; font-weight: 800; color: white; letter-spacing: -0.02em;">
+                AuditSaaS — Auditor Financiero B2B
+            </h1>
+            <p style="margin: 0.4rem 0 0 0; color: #93C5FD; font-size: 1rem; font-weight: 400;">
+                Analítica bancaria avanzada, detección de anomalías y conversión de estados de cuenta a Excel.
+            </p>
+        </div>
+    </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ─────────────────────────────────────────────
+# CARGA Y PROCESAMIENTO
+# ─────────────────────────────────────────────
+uploaded_file = st.file_uploader(
+    "📄 Arrastra tu estado de cuenta (PDF, Excel o Imagen) para iniciar el análisis",
+    type=["pdf", "xlsx", "xls", "png", "jpg", "jpeg"],
+)
 
 if uploaded_file is not None:
-    bytes_data = uploaded_file.getvalue()
+    ext = uploaded_file.name.split(".")[-1].lower()
+    df_tx = pd.DataFrame()
+    es_escaneado = False
+    pdf_digital = b""
+    bytes_archivo_original = uploaded_file.read()
+    uploaded_file.seek(0)
 
-    with st.spinner("Procesando documento y extrayendo movimientos..."):
-        df_extraido = extraer_movimientos_pdf(bytes_data)
+    with st.spinner("🔍 Analizando datos del documento..."):
+        if ext == "pdf":
+            df_tx, es_escaneado = extraer_transacciones_pdf(uploaded_file)
+            if es_escaneado:
+                st.warning("⚠️ Documento escaneado detectado. Procesando vía OCR...")
+                uploaded_file.seek(0)
+                df_tx, pdf_digital = ocr_pdf_a_digital(bytes_archivo_original)
 
-    if df_extraido.empty:
-        st.warning(
-            "⚠️ No se detectaron movimientos individuales legibles en el PDF. Si es una imagen o PDF escaneado, requiere OCR."
-        )
-    else:
-        # Permite edición interactiva en vivo por el usuario
-        st.subheader("✏️ Editor Interactivo de Transacciones")
-        st.caption(
-            "Puedes editar la Fecha, Concepto, Monto o cambiar entre 'Ingreso' y 'Egreso' en la tabla interactiva:"
-        )
+        elif ext in ["xlsx", "xls"]:
+            try:
+                df_tx = pd.read_excel(uploaded_file)
+                if "Tipo" not in df_tx.columns and "Concepto" in df_tx.columns:
+                    df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_concepto)
+            except Exception as e:
+                st.error(f"Error al leer el archivo Excel: {e}")
 
-        df_editado = st.data_editor(
-            df_extraido,
-            num_rows="dynamic",
-            use_container_width=True,
-            column_config={
-                "Fecha": st.column_config.TextColumn(
-                    "Fecha", help="Fecha de la transacción"
-                ),
-                "Concepto": st.column_config.TextColumn(
-                    "Concepto / Descripción", width="large"
-                ),
-                "Monto ($)": st.column_config.NumberColumn(
-                    "Monto ($)", format="$%.2f"
-                ),
-                "Tipo": st.column_config.SelectboxColumn(
-                    "Tipo de Movimiento",
-                    options=["Ingreso", "Egreso"],
-                    required=True,
-                ),
-                "Categoría": st.column_config.SelectboxColumn(
-                    "Categoría",
-                    options=[
-                        "Operativo",
-                        "Nómina",
-                        "Impuestos",
-                        "Ventas",
-                        "Servicios",
-                    ],
-                ),
-            },
-        )
+    if not df_tx.empty and "Monto" in df_tx.columns:
+        ingresos_calc = float(df_tx[df_tx["Tipo"] == "Ingreso"]["Monto"].sum()) if "Tipo" in df_tx.columns else float(df_tx["Monto"].sum())
+        egresos_calc = float(df_tx[df_tx["Tipo"] == "Egreso"]["Monto"].sum()) if "Tipo" in df_tx.columns else 0.0
+        util_neta = ingresos_calc - egresos_calc
+        margen_calc = ((util_neta / ingresos_calc) * 100) if ingresos_calc > 0 else 0.0
+        conteo_calc = len(df_tx)
 
-        # Cálculo dinámico de métricas basado en la tabla editable
-        ingresos_total = df_editado[df_editado["Tipo"] == "Ingreso"][
-            "Monto ($)"
-        ].sum()
-        egresos_total = df_editado[df_editado["Tipo"] == "Egreso"][
-            "Monto ($)"
-        ].sum()
-        margen_neto = ingresos_total - egresos_total
-        conteo_total = len(df_editado)
-
-        # Muestrario de Métricas con CSS
-        st.markdown("<br>", unsafe_allow_html=True)
-        col1, col2, col3, col4 = st.columns(4)
-
-        with col1:
-            st.markdown(
-                f"""
-            <div class="metric-card">
-                <div class="metric-title">🟢 Total Ingresos</div>
-                <div class="metric-val-ingreso">${ingresos_total:,.2f}</div>
-            </div>
-            """,
-                unsafe_allow_html=True,
+        # EVALUACIÓN DE REGLAS DE NEGOCIO SEGÚN PARÁMETROS LATERALES
+        hallazgos = []
+        if egresos_calc > ingresos_calc:
+            hallazgos.append(
+                f"<b>Alerta Crítica:</b> Los egresos (${egresos_calc:,.2f}) superan a los ingresos (${ingresos_calc:,.2f}). Flujo de caja negativo."
+            )
+        else:
+            hallazgos.append(
+                f"<b>Salud Financiera Positiva:</b> Margen neto del {margen_calc:.1f}% con una utilidad de ${util_neta:,.2f}."
             )
 
-        with col2:
-            st.markdown(
-                f"""
-            <div class="metric-card">
-                <div class="metric-title">🔴 Total Egresos</div>
-                <div class="metric-val-egreso">${egresos_total:,.2f}</div>
-            </div>
-            """,
-                unsafe_allow_html=True,
+        # Lógica del umbral ingresado en Sidebar
+        egresos_altos = df_tx[
+            (df_tx["Tipo"] == "Egreso") & (df_tx["Monto"] >= umbral_egreso)
+        ]
+        if not egresos_altos.empty:
+            hallazgos.append(
+                f"<b>Egresos Elevados:</b> Se identificaron {len(egresos_altos)} movimientos superiores al umbral de ${umbral_egreso:,.2f}."
             )
 
-        with col3:
-            st.markdown(
-                f"""
-            <div class="metric-card">
-                <div class="metric-title">🔵 Margen Neto</div>
-                <div class="metric-val-neto">${margen_neto:,.2f}</div>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-        with col4:
-            st.markdown(
-                f"""
-            <div class="metric-card">
-                <div class="metric-title">🟣 Movimientos</div>
-                <div class="metric-val-count">{conteo_total}</div>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown("<br><hr>", unsafe_allow_html=True)
-
-        # Módulo de Exportación y Descargas
-        st.subheader("📥 Exportar Reportes Auditoría")
-        col_exp1, col_exp2 = st.columns(2)
-
-        with col_exp1:
-            # Excel
-            buffer_excel = BytesIO()
-            with pd.ExcelWriter(buffer_excel, engine="openpyxl") as writer:
-                df_editado.to_excel(
-                    writer, index=False, sheet_name="Transacciones"
+        # Lógica del checkbox de duplicados en Sidebar
+        dups = pd.DataFrame()
+        if alertar_duplicados:
+            dups = df_tx[df_tx.duplicated(subset=["Monto", "Tipo"], keep=False)]
+            if not dups.empty:
+                hallazgos.append(
+                    f"<b>Detección de Duplicados:</b> Se encontraron {len(dups)} transacciones con montos idénticos."
                 )
-                resumen_df = pd.DataFrame(
-                    {
-                        "Métrica": [
-                            "Ingresos Totales",
-                            "Egresos Totales",
-                            "Margen Neto",
-                            "Total Transacciones",
-                        ],
-                        "Monto ($)": [
-                            ingresos_total,
-                            egresos_total,
-                            margen_neto,
-                            conteo_total,
-                        ],
-                    }
-                )
-                resumen_df.to_excel(writer, index=False, sheet_name="Resumen")
-            buffer_excel.seek(0)
+
+        # TARJETAS DE MÉTRICAS (KPIs)
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Ingresos", f"${ingresos_calc:,.2f}")
+        m2.metric("Total Egresos", f"${egresos_calc:,.2f}")
+        m3.metric("Utilidad Neta", f"${util_neta:,.2f}")
+        m4.metric("Margen Neto", f"{margen_calc:.1f}%")
+
+        st.markdown("<br/>", unsafe_allow_html=True)
+
+        # PESTAÑAS DE TRABAJO
+        tab_tx, tab_pdf, tab_audit, tab_export = st.tabs([
+            "📋 Transacciones Extraídas",
+            "📄 Reporte PDF Ejecutivo",
+            "🛡️ Diagnóstico Anti-Fraude",
+            "📥 Conversión & Exportar a Excel",
+        ])
+
+        # FILTRADO DE LA TABLA SEGÚN EL SIDEBAR
+        df_mostrar = df_tx.copy()
+        if filtro_tipo == "Solo Ingresos":
+            df_mostrar = df_mostrar[df_mostrar["Tipo"] == "Ingreso"]
+        elif filtro_tipo == "Solo Egresos":
+            df_mostrar = df_mostrar[df_mostrar["Tipo"] == "Egreso"]
+
+        with tab_tx:
+            st.markdown(f"##### 🔍 Movimientos Registrados ({filtro_tipo})")
+            st.dataframe(df_mostrar, use_container_width=True, height=380)
+
+        with tab_pdf:
+            st.markdown("##### 📄 Generar Informe Oficial")
+            st.info(f"El reporte incluirá la carátula con la empresa: **{empresa_input}** y período: **{periodo_input}**.")
+
+            pdf_bytes_report = generar_pdf_reporte(
+                empresa=empresa_input,
+                periodo=periodo_input,
+                ingresos=ingresos_calc,
+                egresos=egresos_calc,
+                utilidad=util_neta,
+                margen=margen_calc,
+                df_tx=df_tx,
+                hallazgos=hallazgos,
+            )
 
             st.download_button(
-                label="📊 Descargar Transacciones en Excel",
-                data=buffer_excel,
-                file_name=f"Auditoria_Transacciones_{date.today().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-        with col_exp2:
-            # PDF
-            pdf_bytes = generar_pdf_reporte(
-                df_editado, ingresos_total, egresos_total, margen_neto
-            )
-            st.download_button(
-                label="📄 Descargar Reporte PDF Ejecutivo",
-                data=pdf_bytes,
-                file_name=f"Reporte_Ejecutivo_{date.today().strftime('%Y%m%d')}.pdf",
+                "📥 Descargar Reporte Ejecutivo en PDF",
+                data=pdf_bytes_report,
+                file_name=f"Reporte_{empresa_input.replace(' ', '_')}_{date.today().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
             )
+
+        with tab_audit:
+            st.markdown("##### 🛡️ Diagnóstico Anti-Fraude Activo")
+            for h in hallazgos:
+                if "Crítica" in h or "Elevados" in h:
+                    st.error(h)
+                else:
+                    st.success(h)
+
+            if not egresos_altos.empty:
+                st.markdown(f"<h6>Movimientos superiores a ${umbral_egreso:,.2f}:</h6>", unsafe_allow_html=True)
+                st.dataframe(egresos_altos, use_container_width=True)
+
+            if alertar_duplicados and not dups.empty:
+                st.markdown("<h6>Transacciones con montos duplicados:</h6>", unsafe_allow_html=True)
+                st.dataframe(dups, use_container_width=True)
+
+        with tab_export:
+            st.markdown("##### 📊 Conversión de Archivos y Exportación")
+            
+            col_ex1, col_ex2 = st.columns(2)
+            
+            with col_ex1:
+                st.markdown("###### 1. Convertir Estado de Cuenta (PDF) a Excel")
+                excel_buf = BytesIO()
+                with pd.ExcelWriter(excel_buf, engine="openpyxl") as writer:
+                    df_tx.to_excel(writer, index=False, sheet_name="Transacciones")
+                    resumen = pd.DataFrame(
+                        {
+                            "Indicador": ["Empresa", "Período", "Ingresos", "Egresos", "Utilidad Neta", "Margen Neto", "Transacciones"],
+                            "Valor": [empresa_input, periodo_input, ingresos_calc, egresos_calc, util_neta, f"{margen_calc:.1f}%", conteo_calc],
+                        }
+                    )
+                    resumen.to_excel(writer, index=False, sheet_name="Resumen")
+                excel_buf.seek(0)
+                
+                st.download_button(
+                    "📥 Descargar PDF Convertido a Excel (.xlsx)",
+                    data=excel_buf,
+                    file_name=f"Estado_Cuenta_{empresa_input.replace(' ', '_')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+
+            with col_ex2:
+                st.markdown("###### 2. Digitalizar PDF Escaneado / Imagen")
+                if pdf_digital:
+                    st.success("✅ PDF escaneado digitalizado con OCR.")
+                    st.download_button(
+                        "📥 Descargar PDF Digitalizado (OCR)",
+                        data=pdf_digital,
+                        file_name=f"AuditSaaS_OCR_{date.today().strftime('%Y%m%d')}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                    )
+                elif ext == "pdf" and not es_escaneado:
+                    st.info("ℹ️ Tu PDF es nativo digital (texto seleccionable). No requiere OCR.")
+                else:
+                    st.info("ℹ️ Sube una imagen o PDF escaneado para procesarlo por OCR.")
+
+    else:
+        st.warning("⚠️ No se identificaron transacciones válidas en el documento cargado.")
 
 else:
-    st.info(
-        "👈 Comienza cargando un Estado de Cuenta en formato PDF desde el menú lateral para iniciar la auditoría."
-    )
+    st.info("👆 Carga un estado de cuenta en el panel central para iniciar el proceso de auditoría y análisis.")
