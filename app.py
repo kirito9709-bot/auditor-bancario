@@ -110,52 +110,62 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO
+# REGLAS Y DICCIONARIOS DE EXTRACCIÓN BANREGIO / GENERIQUIS
 # ─────────────────────────────────────────────
 KEYWORDS_INGRESO = [
-    "abono", "deposito", "depositos", "recibido", "credito",
-    "transferencia recibida", "ingreso", "intereses ganados",
-    "spei recibido", "nomm", "factura", "cobro", "venta",
+    "spei recibido", "deposito", "depositos", "abono", "abonos",
+    "su pago", "traspaso recibido", "credito", "intereses ganados",
+    "factura", "cobro", "venta", "reembolso", "devolucion"
 ]
 KEYWORDS_EGRESO = [
-    "cargo", "retiro", "pago", "compra", "comision", "iva",
-    "spei enviado", "debito", "cheque", "egreso", "disposicion",
-    "impuesto", "isr", "comision por", "mantenimiento", "gasto",
+    "spei enviado", "retiro", "retiros", "cargo", "cargos",
+    "compra", "comision", "iva", "cheque", "ch/", "debito",
+    "disposicion", "impuesto", "isr", "mantenimiento", "gasto",
+    "pago de servicio", "nomina"
 ]
 
-def clasificar_concepto(texto: str) -> str:
-    t = texto.lower()
-    if any(k in t for k in KEYWORDS_INGRESO):
+def clasificar_tipo_concepto(concepto: str) -> str:
+    c_lower = concepto.lower()
+    if any(k in c_lower for k in KEYWORDS_INGRESO):
         return "Ingreso"
-    if any(k in t for k in KEYWORDS_EGRESO):
+    if any(k in c_lower for k in KEYWORDS_EGRESO):
         return "Egreso"
     return "Egreso"
 
-def parsear_lineas_texto(text: str, origen: str) -> list:
-    rows = []
-    lines = text.split("\n")
-    pattern = re.compile(
-        r"(\d{2}[/-]\d{2}[/-]\d{2,4}|\d{2}\s+[A-Za-z]{3})\s+(.*?)\s+[\$]?\s*([0-9,]+\.[0-9]{2})"
+
+def procesar_linea_estado_cuenta(linea: str, origen: str) -> dict | None:
+    # Ignorar encabezados o resúmenes globales del banco
+    linea_upper = linea.upper()
+    if any(header in linea_upper for header in ["SALDO ANTERIOR", "SALDO PROMEDIO", "RESUMEN DE MOVIMIENTOS", "TOTAL DE DEPOSITOS", "TOTAL DE RETIROS", "DETALLE DE MOVIMIENTOS"]):
+        return None
+
+    # Expresión regular ajustada para capturar: Fecha + Concepto + Monto Depósito/Retiro (+ opcional Saldo)
+    # Ejemplos detectables:
+    # 01/SEP SPEI RECIBIDO BBVA 12,500.00 45,200.00
+    # 02 FEB COMPRA TDD OXXO 150.50
+    puntero = re.search(
+        r"^(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{1,2}\s+[A-Za-z]{3})\s+(.*?)\s+([\$\s\d,]+\.\d{2})(?:\s+[\$\s\d,]+\.\d{2})?",
+        linea.strip()
     )
-    for line in lines:
-        match = pattern.search(line)
-        if match:
-            fecha, concepto, monto_str = match.groups()
-            try:
-                monto = float(monto_str.replace(",", ""))
-                if monto > 0:
-                    tipo = clasificar_concepto(concepto)
-                    rows.append({
-                        "Origen": origen,
-                        "Fecha": fecha.strip(),
-                        "Concepto": concepto.strip(),
-                        "Monto": monto,
-                        "Tipo": tipo,
-                        "Estado": "Normal",
-                    })
-            except ValueError:
-                pass
-    return rows
+
+    if puntero:
+        fecha_raw, concepto_raw, monto_str = puntero.group(1), puntero.group(2), puntero.group(3)
+        try:
+            monto_clean = float(monto_str.replace("$", "").replace(",", "").strip())
+            if monto_clean > 0:
+                tipo = clasificar_tipo_concepto(concepto_raw)
+                return {
+                    "Origen": origen,
+                    "Fecha": fecha_raw.strip(),
+                    "Concepto": concepto_raw.strip(),
+                    "Monto": monto_clean,
+                    "Tipo": tipo,
+                    "Estado": "Normal",
+                }
+        except ValueError:
+            pass
+    return None
+
 
 def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
     rows = []
@@ -163,70 +173,44 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
     pdf_bytes = file_pdf.read()
 
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
-        texto_total = ""
-        for i, page in enumerate(pdf.pages, 1):
+        texto_acumulado = ""
+        for page_idx, page in enumerate(pdf.pages, 1):
             txt = page.extract_text() or ""
-            texto_total += txt
+            texto_acumulado += txt
 
+            # 1. Extracción Estructurada por Tablas
             tables = page.extract_tables()
             for tbl in tables:
                 for row in tbl:
-                    if not row:
+                    if not row or len(row) < 3:
                         continue
-                    rc = [
-                        str(c).replace("\n", " ").strip()
-                        for c in row
-                        if c is not None
-                    ]
-                    if len(rc) < 2:
-                        continue
-                    for cell in rc:
-                        m = re.search(
-                            r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)",
-                            cell,
-                        )
-                        if m:
-                            try:
-                                v = float(m.group(1).replace(",", ""))
-                                if v > 0:
-                                    linea_str = " ".join(rc)
-                                    tipo = clasificar_concepto(linea_str)
-                                    rows.append({
-                                        "Origen": f"Pág.{i}",
-                                        "Fecha": rc[0] if len(rc) > 0 else "N/A",
-                                        "Concepto": (
-                                            rc[1] if len(rc) > 1 else "Movimiento"
-                                        ),
-                                        "Monto": v,
-                                        "Tipo": tipo,
-                                        "Estado": "Normal",
-                                    })
-                                    break
-                            except ValueError:
-                                pass
+                    
+                    row_clean = [str(c).replace("\n", " ").strip() for c in row if c is not None]
+                    linea_unida = " ".join(row_clean)
+                    
+                    parsed = procesar_linea_estado_cuenta(linea_unida, f"Pág.{page_idx}")
+                    if parsed:
+                        rows.append(parsed)
 
-            if not tables and txt.strip():
-                rows.extend(parsear_lineas_texto(txt, f"Pág.{i}"))
+            # 2. Extracción por Líneas de Texto si las tablas no capturaron todo
+            if not tables or len(rows) == 0:
+                for line in txt.split("\n"):
+                    parsed = procesar_linea_estado_cuenta(line, f"Pág.{page_idx}")
+                    if parsed:
+                        rows.append(parsed)
 
-        if len(texto_total.strip()) < 50 and len(rows) == 0:
+        if len(texto_acumulado.strip()) < 50 and len(rows) == 0:
             es_escaneado = True
 
-    df = (
-        pd.DataFrame(rows)
-        if rows
-        else pd.DataFrame(
-            columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"]
-        )
-    )
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"])
 
     if not df.empty:
         df["Estado"] = "Normal"
         p95 = df["Monto"].quantile(0.95) if len(df) > 5 else 999999
-        df.loc[
-            (df["Monto"] > p95) & (df["Tipo"] == "Egreso"), "Estado"
-        ] = "⚠️ Inconsistencia"
+        df.loc[(df["Monto"] > p95) & (df["Tipo"] == "Egreso"), "Estado"] = "⚠️ Inconsistencia"
 
     return df, es_escaneado
+
 
 def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
     if not OCR_DISPONIBLE:
@@ -239,15 +223,12 @@ def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
     for idx, img in enumerate(images, 1):
         txt = pytesseract.image_to_string(img, lang="spa+eng")
         all_text += f"\n--- Página {idx} ---\n" + txt
-        rows.extend(parsear_lineas_texto(txt, f"OCR Pág.{idx}"))
+        for line in txt.split("\n"):
+            parsed = procesar_linea_estado_cuenta(line, f"OCR Pág.{idx}")
+            if parsed:
+                rows.append(parsed)
 
-    df = (
-        pd.DataFrame(rows)
-        if rows
-        else pd.DataFrame(
-            columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"]
-        )
-    )
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Origen", "Fecha", "Concepto", "Monto", "Tipo", "Estado"])
 
     buffer_out = BytesIO()
     doc = SimpleDocTemplate(buffer_out, pagesize=letter)
@@ -262,24 +243,11 @@ def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
 
     return df, buffer_out.getvalue()
 
-def generar_pdf_reporte(
-    empresa: str,
-    periodo: str,
-    ingresos: float,
-    egresos: float,
-    utilidad: float,
-    margen: float,
-    df_tx: pd.DataFrame,
-    hallazgos: list,
-) -> bytes:
+
+def generar_pdf_reporte(empresa: str, periodo: str, ingresos: float, egresos: float, utilidad: float, margen: float, df_tx: pd.DataFrame, hallazgos: list) -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        rightMargin=1.8 * cm,
-        leftMargin=1.8 * cm,
-        topMargin=2 * cm,
-        bottomMargin=2 * cm,
+        buffer, pagesize=A4, rightMargin=1.8 * cm, leftMargin=1.8 * cm, topMargin=2 * cm, bottomMargin=2 * cm
     )
 
     c_navy = colors.HexColor("#0F172A")
@@ -291,31 +259,19 @@ def generar_pdf_reporte(
     c_green = colors.HexColor("#16A34A")
 
     styles = getSampleStyleSheet()
-    s_title = ParagraphStyle(
-        "DocTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=c_navy
-    )
-    s_subtitle = ParagraphStyle(
-        "DocSubtitle", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#64748B")
-    )
-    s_h2 = ParagraphStyle(
-        "SectionH2", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=c_blue, spaceBefore=14, spaceAfter=6
-    )
-    s_body = ParagraphStyle(
-        "Body", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=c_dark
-    )
+    s_title = ParagraphStyle("DocTitle", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=20, leading=24, textColor=c_navy)
+    s_subtitle = ParagraphStyle("DocSubtitle", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=14, textColor=colors.HexColor("#64748B"))
+    s_h2 = ParagraphStyle("SectionH2", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=c_blue, spaceBefore=14, spaceAfter=6)
+    s_body = ParagraphStyle("Body", parent=styles["Normal"], fontName="Helvetica", fontSize=9, leading=13, textColor=c_dark)
 
-    story = []
-    story.append(Paragraph("AUDITSAAS — INFORME EJECUTIVO", s_title))
-    story.append(
-        Paragraph(
-            f"Empresa: <b>{empresa}</b> &nbsp;|&nbsp; Período: <b>{periodo}</b> &nbsp;|&nbsp; Emisión: {date.today().strftime('%d/%m/%Y')}",
-            s_subtitle,
-        )
-    )
-    story.append(Spacer(1, 8))
-    story.append(HRFlowable(width="100%", thickness=2, color=c_accent, spaceAfter=14))
+    story = [
+        Paragraph("AUDITSAAS — INFORME EJECUTIVO", s_title),
+        Paragraph(f"Empresa: <b>{empresa}</b> &nbsp;|&nbsp; Período: <b>{periodo}</b> &nbsp;|&nbsp; Emisión: {date.today().strftime('%d/%m/%Y')}", s_subtitle),
+        Spacer(1, 8),
+        HRFlowable(width="100%", thickness=2, color=c_accent, spaceAfter=14),
+        Paragraph("1. RESUMEN DE SALUD FINANCIERA", s_h2)
+    ]
 
-    story.append(Paragraph("1. RESUMEN DE SALUD FINANCIERA", s_h2))
     kpi_data = [
         [
             Paragraph(f"<b>TOTAL INGRESOS</b><br/><font size=12 color='{c_green}'>${ingresos:,.2f}</font>", s_body),
@@ -325,16 +281,14 @@ def generar_pdf_reporte(
         ]
     ]
     t_kpi = Table(kpi_data, colWidths=[4.2 * cm] * 4)
-    t_kpi.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), c_light),
-            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-            ("TOPPADDING", (0, 0), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ])
-    )
+    t_kpi.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), c_light),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+    ]))
     story.append(t_kpi)
     story.append(Spacer(1, 12))
 
@@ -359,18 +313,16 @@ def generar_pdf_reporte(
                 str(r.get("Estado", "")),
             ])
         t_tx = Table(t_rows, colWidths=[2 * cm, 2.2 * cm, 6.5 * cm, 2.5 * cm, 2 * cm, 2.2 * cm])
-        t_tx.setStyle(
-            TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), c_navy),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("FONTSIZE", (0, 0), (-1, 0), 8),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
-                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-            ])
-        )
+        t_tx.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), c_navy),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, 0), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ]))
         story.append(t_tx)
     else:
         story.append(Paragraph("No se registraron transacciones detalladas.", s_body))
@@ -381,7 +333,7 @@ def generar_pdf_reporte(
 
 
 # ─────────────────────────────────────────────
-# MENU LATERAL IZQUIERDO (CONTROLES ACTIVOS)
+# MENÚ LATERAL IZQUIERDO (CONTROLES ACTIVOS)
 # ─────────────────────────────────────────────
 st.sidebar.markdown("### ⚙️ Parámetros de Auditoría")
 empresa_input = st.sidebar.text_input("Nombre de la Empresa", value="Mi PyME S.A. de C.V.")
@@ -389,17 +341,12 @@ periodo_input = st.sidebar.text_input("Período Auditoría", value="Enero 2026")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🎯 Umbrales Anti-Fraude")
-umbral_egreso = st.sidebar.number_input(
-    "Alerta Egreso Mayor a ($)", value=25000.0, step=5000.0
-)
+umbral_egreso = st.sidebar.number_input("Alerta Egreso Mayor a ($)", value=25000.0, step=5000.0)
 alertar_duplicados = st.sidebar.checkbox("Detectar Montos Duplicados", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔍 Filtro de Movimientos")
-filtro_tipo = st.sidebar.selectbox(
-    "Mostrar en la vista de tabla:",
-    ["Todos", "Solo Ingresos", "Solo Egresos"]
-)
+filtro_tipo = st.sidebar.selectbox("Mostrar en la vista de tabla:", ["Todos", "Solo Ingresos", "Solo Egresos"])
 
 NUMERO_WHATSAPP = "528121106491"
 MENSAJE_WHATSAPP = "Hola, utilicé la app de Auditoría Bancaria y me gustaría solicitar una consulta personalizada."
@@ -475,7 +422,7 @@ if uploaded_file is not None:
     bytes_archivo_original = uploaded_file.read()
     uploaded_file.seek(0)
 
-    with st.spinner("🔍 Analizando datos del documento..."):
+    with st.spinner("🔍 Analizando estructura del estado de cuenta..."):
         if ext == "pdf":
             df_tx, es_escaneado = extraer_transacciones_pdf(uploaded_file)
             if es_escaneado:
@@ -487,7 +434,7 @@ if uploaded_file is not None:
             try:
                 df_tx = pd.read_excel(uploaded_file)
                 if "Tipo" not in df_tx.columns and "Concepto" in df_tx.columns:
-                    df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_concepto)
+                    df_tx["Tipo"] = df_tx["Concepto"].apply(clasificar_tipo_concepto)
             except Exception as e:
                 st.error(f"Error al leer el archivo Excel: {e}")
 
@@ -498,7 +445,7 @@ if uploaded_file is not None:
         margen_calc = ((util_neta / ingresos_calc) * 100) if ingresos_calc > 0 else 0.0
         conteo_calc = len(df_tx)
 
-        # EVALUACIÓN DE REGLAS DE NEGOCIO SEGÚN PARÁMETROS LATERALES
+        # EVALUACIÓN DE REGLAS
         hallazgos = []
         if egresos_calc > ingresos_calc:
             hallazgos.append(
@@ -509,16 +456,12 @@ if uploaded_file is not None:
                 f"<b>Salud Financiera Positiva:</b> Margen neto del {margen_calc:.1f}% con una utilidad de ${util_neta:,.2f}."
             )
 
-        # Lógica del umbral ingresado en Sidebar
-        egresos_altos = df_tx[
-            (df_tx["Tipo"] == "Egreso") & (df_tx["Monto"] >= umbral_egreso)
-        ]
+        egresos_altos = df_tx[(df_tx["Tipo"] == "Egreso") & (df_tx["Monto"] >= umbral_egreso)]
         if not egresos_altos.empty:
             hallazgos.append(
                 f"<b>Egresos Elevados:</b> Se identificaron {len(egresos_altos)} movimientos superiores al umbral de ${umbral_egreso:,.2f}."
             )
 
-        # Lógica del checkbox de duplicados en Sidebar
         dups = pd.DataFrame()
         if alertar_duplicados:
             dups = df_tx[df_tx.duplicated(subset=["Monto", "Tipo"], keep=False)]
@@ -527,7 +470,7 @@ if uploaded_file is not None:
                     f"<b>Detección de Duplicados:</b> Se encontraron {len(dups)} transacciones con montos idénticos."
                 )
 
-        # TARJETAS DE MÉTRICAS (KPIs)
+        # METRICAS PRINCIPALES
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Ingresos", f"${ingresos_calc:,.2f}")
         m2.metric("Total Egresos", f"${egresos_calc:,.2f}")
@@ -536,7 +479,7 @@ if uploaded_file is not None:
 
         st.markdown("<br/>", unsafe_allow_html=True)
 
-        # PESTAÑAS DE TRABAJO
+        # PESTAÑAS
         tab_tx, tab_pdf, tab_audit, tab_export = st.tabs([
             "📋 Transacciones Extraídas",
             "📄 Reporte PDF Ejecutivo",
@@ -544,7 +487,7 @@ if uploaded_file is not None:
             "📥 Conversión & Exportar a Excel",
         ])
 
-        # FILTRADO DE LA TABLA SEGÚN EL SIDEBAR
+        # FILTRO SIDEBAR
         df_mostrar = df_tx.copy()
         if filtro_tipo == "Solo Ingresos":
             df_mostrar = df_mostrar[df_mostrar["Tipo"] == "Ingreso"]
