@@ -115,7 +115,6 @@ KEYWORDS_EGRESO = [
     "taqueria", "josephinos", "asadero", "oxxo gas", "domiciliacion", "pago cuenta de tercero"
 ]
 
-# TÉRMINOS CLAVE PARA DESCARTAR TOTALES, RESÚMENES Y SALDOS FINANCIEROS
 IGNORE_TERMS = [
     "saldo anterior", "saldo final", "saldo promedio", "saldo del periodo",
     "total importe", "total de movimientos", "total cargos", "total abonos",
@@ -466,6 +465,3 @@ if not df_transacciones.empty:
 
 else:
     st.warning("⚠️ No se identificaron transacciones válidas en el documento cargado.")
-
-else:
-    st.info("👆 Carga un estado de cuenta en el panel central para iniciar el proceso de auditoría y análisis.")
