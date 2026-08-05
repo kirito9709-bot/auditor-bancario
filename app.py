@@ -110,17 +110,27 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO REFORZADAS
+# FUNCIONES DE PROCESAMIENTO MEJORADAS PARA LECTURA DE PDF
 # ─────────────────────────────────────────────
 KEYWORDS_INGRESO = [
-    "abono", "deposito", "depositos", "recibido", "credito",
-    "transferencia recibida", "ingreso", "intereses ganados",
-    "spei recibido", "nomm", "factura", "cobro", "venta", "deposito en efectivo"
+    "spei recibido", "deposito", "depositos", "abono", "abonos", "recibido", 
+    "credito", "transferencia recibida", "ingreso", "intereses ganados", "interes",
+    "nomm", "nomina", "factura", "cobro", "venta", "deposito en efectivo", 
+    "devolucion", "reembolso", "traspaso a favor", "dep ", "dep."
 ]
+
 KEYWORDS_EGRESO = [
-    "cargo", "retiro", "pago", "compra", "comision", "iva",
-    "spei enviado", "debito", "cheque", "egreso", "disposicion",
-    "impuesto", "isr", "comision por", "mantenimiento", "gasto", "disposicion"
+    "spei enviado", "pago", "compra", "cargo", "cargos", "retiro", "retiros",
+    "comision", "comisiones", "iva", "debito", "cheque", "egreso", "disposicion",
+    "impuesto", "isr", "mantenimiento", "gasto", "str*", "facebk", "uber", "cajero",
+    "gas", "oxxo", "heb", "amazon", "telcel", "axtel", "rest", "benavides",
+    "taqueria", "josephinos", "asadero", "oxxo gas", "domiciliacion", "pago cuenta de tercero"
+]
+
+IGNORE_TERMS = [
+    "saldo anterior", "total importe", "cuadro resumen", "saldo promedio", 
+    "total movimientos", "rendimiento", "información financiera", "gat nominal", 
+    "porcentaje", "saldo final", "comportamiento", "concepto cantidad porcentaje"
 ]
 
 def clasificar_concepto(texto: str) -> str:
@@ -133,87 +143,72 @@ def clasificar_concepto(texto: str) -> str:
 
 def parsear_lineas_texto(text: str, origen: str) -> list:
     """
-    Parsea texto extraído mediante expresiones regulares multitipo para capturar
-    fechas complejas, descripciones largas e importes de ingresos o egresos.
+    Parsea de manera inteligente líneas de texto en estados de cuenta
+    manejando múltiples fechas (ej. 19/MAR, 19/03/2024), conceptos largos y montos.
     """
     rows = []
     lines = text.split("\n")
     
-    # Patrón 1: Captura Fechas (DD/MM/AAAA, DD-MMM-YY, etc.), Concepto y Monto
-    pattern_std = re.compile(
-        r"^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3}(?:\s+\d{2,4})?)\s+(.*?)\s+[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2}))",
-        re.IGNORECASE
-    )
-    # Patrón 2: Captura Fechas al inicio, concepto y dos columnas numéricas (Retiro / Depósito)
-    pattern_dos_monto = re.compile(
-        r"^(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3})\s+(.*?)\s+[\$]?\s*([0-9,]+\.[0-9]{2})\s+[\$]?\s*([0-9,]+\.[0-9]{2})",
-        re.IGNORECASE
-    )
+    # Expresión regular para fechas bancarias comunes: 19/MAR, 19/03/2024, 19-MAR-24, etc.
+    regex_fecha = r"(\b\d{1,2}[/\-\s](?:0[1-9]|1[0-2]|[A-Za-z]{3})(?:[/\-\s]\d{2,4})?\b)"
+    # Regex para extraer montos como 150,000.00 o 432.40
+    regex_monto = r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})"
 
     for line in lines:
         line_clean = line.strip()
         if not line_clean:
             continue
+        
+        # Ignorar encabezados y resúmenes de saldos
+        if any(term in line_clean.lower() for term in IGNORE_TERMS):
+            continue
+
+        fechas = re.findall(regex_fecha, line_clean, re.IGNORECASE)
+        montos = re.findall(regex_monto, line_clean)
+
+        if fechas and montos:
+            fecha_val = fechas[0].strip()
             
-        m_dos = pattern_dos_monto.search(line_clean)
-        if m_dos:
-            fecha, concepto, col1, col2 = m_dos.groups()
+            # Limpiar el concepto removiendo las fechas e importes
+            concepto_clean = line_clean
+            for f in fechas:
+                concepto_clean = concepto_clean.replace(f, "")
+            for m in montos:
+                concepto_clean = concepto_clean.replace(m, "").replace("$", "")
+            
+            concepto_clean = re.sub(r"\s+", " ", concepto_clean).strip()
+            if not concepto_clean or len(concepto_clean) < 2:
+                concepto_clean = "Movimiento Bancario"
+
+            # Si hay más de un monto (ej. Monto de Transacción y Saldo posterior)
+            # Tomamos el primer monto como la transacción real
             try:
-                v1 = float(col1.replace(",", ""))
-                v2 = float(col2.replace(",", ""))
-                if v1 > 0:
+                monto_val = float(montos[0].replace(",", ""))
+                if monto_val > 0:
+                    tipo_trans = clasificar_concepto(line_clean)
                     rows.append({
                         "Origen": origen,
-                        "Fecha": fecha.strip(),
-                        "Concepto": concepto.strip(),
-                        "Monto": v1,
-                        "Tipo": "Egreso",
+                        "Fecha": fecha_val,
+                        "Concepto": concepto_clean,
+                        "Monto": monto_val,
+                        "Tipo": tipo_trans,
                         "Estado": "Normal",
                     })
-                if v2 > 0:
-                    rows.append({
-                        "Origen": origen,
-                        "Fecha": fecha.strip(),
-                        "Concepto": concepto.strip(),
-                        "Monto": v2,
-                        "Tipo": "Ingreso",
-                        "Estado": "Normal",
-                    })
-                continue
             except ValueError:
                 pass
 
-        m_std = pattern_std.search(line_clean)
-        if m_std:
-            fecha, concepto, monto_str = m_std.groups()
-            try:
-                monto = float(monto_str.replace(",", ""))
-                if monto > 0:
-                    tipo = clasificar_concepto(concepto)
-                    rows.append({
-                        "Origen": origen,
-                        "Fecha": fecha.strip(),
-                        "Concepto": concepto.strip(),
-                        "Monto": monto,
-                        "Tipo": tipo,
-                        "Estado": "Normal",
-                    })
-            except ValueError:
-                pass
     return rows
 
 def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
     """
-    Extrae transacciones bancarias utilizando análisis estructurado de tablas de pdfplumber 
-    combinado con la detección por posición de columnas (Cargos vs Abonos).
+    Función mejorada para leer PDFs bancarios mediante tabulación y análisis directo de texto,
+    garantizando la correcta extracción de Cargos, Abonos, Fechas y Conceptos.
     """
     rows = []
     es_escaneado = False
     pdf_bytes = file_pdf.read()
 
-    # Regex genérico para fechas
-    regex_fecha = re.compile(r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+[A-Za-z]{3})", re.IGNORECASE)
-    # Regex para extraer montos válidos
+    regex_fecha = re.compile(r"(\b\d{1,2}[/\-\s](?:0[1-9]|1[0-2]|[A-Za-z]{3})(?:[/\-\s]\d{2,4})?\b)", re.IGNORECASE)
     regex_monto = re.compile(r"[\$]?\s*([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})")
 
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
@@ -222,102 +217,88 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
             txt = page.extract_text() or ""
             texto_total += txt
 
-            # Intentar extracción mediante estructuración de tablas
+            # Intento 1: Extracción de tablas estructuradas
             tables = page.extract_tables()
-            lineas_procesadas = 0
+            lineas_extraidas_tabla = False
 
             for tbl in tables:
                 if not tbl:
                     continue
                 
-                # Detectar encabezados para asignar columnas de Ingreso/Egreso/Fecha/Concepto
-                idx_fecha, idx_concepto, idx_egreso, idx_ingreso, idx_monto = -1, -1, -1, -1, -1
+                idx_fecha, idx_concepto, idx_egreso, idx_ingreso = -1, -1, -1, -1
                 
                 header = [str(c).lower() if c else "" for c in tbl[0]]
                 for idx, col in enumerate(header):
-                    if any(k in col for k in ["fecha", "fec"]):
-                        idx_fecha = idx
-                    elif any(k in col for k in ["concepto", "descripcion", "detalle", "movimiento"]):
+                    if any(k in col for k in ["fecha", "fec", "oper", "liq"]):
+                        if idx_fecha == -1: idx_fecha = idx
+                    elif any(k in col for k in ["concepto", "descripcion", "detalle", "movimiento", "referencia"]):
                         idx_concepto = idx
                     elif any(k in col for k in ["cargo", "retiro", "egreso", "debito"]):
                         idx_egreso = idx
                     elif any(k in col for k in ["abono", "deposito", "ingreso", "credito"]):
                         idx_ingreso = idx
-                    elif any(k in col for k in ["monto", "importe"]):
-                        idx_monto = idx
 
-                for row in tbl:
-                    if not row:
+                for r_idx, row in enumerate(tbl):
+                    if not row or r_idx == 0:
                         continue
                     rc = [str(c).replace("\n", " ").strip() for c in row if c is not None]
-                    if len(rc) < 2:
-                        continue
-                    
-                    # Evitar procesar encabezados nuevamente
-                    linea_texto = " ".join(rc).lower()
-                    if "saldo" in linea_texto and ("concepto" in linea_texto or "fecha" in linea_texto):
+                    row_str = " ".join(rc).lower()
+
+                    if any(term in row_str for term in IGNORE_TERMS):
                         continue
 
                     fecha_val = "N/A"
-                    concepto_val = "Movimiento"
+                    concepto_val = ""
 
-                    # Asignación inteligente según encabezados o posición de índices
+                    # Extraer Fecha
                     if idx_fecha != -1 and idx_fecha < len(rc) and regex_fecha.search(rc[idx_fecha]):
-                        fecha_val = rc[idx_fecha]
+                        fecha_val = regex_fecha.search(rc[idx_fecha]).group(1)
                     else:
                         for cell in rc:
-                            m_f = regex_fecha.search(cell)
-                            if m_f:
-                                fecha_val = m_f.group(1)
+                            mf = regex_fecha.search(cell)
+                            if mf:
+                                fecha_val = mf.group(1)
                                 break
 
-                    if idx_concepto != -1 and idx_concepto < len(rc):
+                    # Extraer Concepto
+                    if idx_concepto != -1 and idx_concepto < len(rc) and len(rc[idx_concepto]) > 2:
                         concepto_val = rc[idx_concepto]
                     else:
-                        for cell in rc:
-                            if not regex_fecha.search(cell) and not regex_monto.search(cell) and len(cell) > 3:
-                                concepto_val = cell
-                                break
+                        conceptos_cand = [c for c in rc if not regex_fecha.search(c) and not regex_monto.search(c) and len(c) > 3]
+                        if conceptos_cand:
+                            concepto_val = " - ".join(conceptos_cand)
 
-                    # Procesar importes por columnas específicas
+                    if not concepto_val:
+                        concepto_val = "Movimiento Bancario"
+
+                    # Extraer Importes según columnas o clasificación
                     agregado = False
                     if idx_egreso != -1 and idx_egreso < len(rc):
                         m_eg = regex_monto.search(rc[idx_egreso])
                         if m_eg:
                             try:
-                                val = float(m_eg.group(1).replace(",", ""))
-                                if val > 0:
+                                v = float(m_eg.group(1).replace(",", ""))
+                                if v > 0:
                                     rows.append({
-                                        "Origen": f"Pág.{i}",
-                                        "Fecha": fecha_val,
-                                        "Concepto": concepto_val,
-                                        "Monto": val,
-                                        "Tipo": "Egreso",
-                                        "Estado": "Normal",
+                                        "Origen": f"Pág.{i}", "Fecha": fecha_val, "Concepto": concepto_val,
+                                        "Monto": v, "Tipo": "Egreso", "Estado": "Normal"
                                     })
                                     agregado = True
-                            except ValueError:
-                                pass
+                            except ValueError: pass
 
                     if idx_ingreso != -1 and idx_ingreso < len(rc):
                         m_in = regex_monto.search(rc[idx_ingreso])
                         if m_in:
                             try:
-                                val = float(m_in.group(1).replace(",", ""))
-                                if val > 0:
+                                v = float(m_in.group(1).replace(",", ""))
+                                if v > 0:
                                     rows.append({
-                                        "Origen": f"Pág.{i}",
-                                        "Fecha": fecha_val,
-                                        "Concepto": concepto_val,
-                                        "Monto": val,
-                                        "Tipo": "Ingreso",
-                                        "Estado": "Normal",
+                                        "Origen": f"Pág.{i}", "Fecha": fecha_val, "Concepto": concepto_val,
+                                        "Monto": v, "Tipo": "Ingreso", "Estado": "Normal"
                                     })
                                     agregado = True
-                            except ValueError:
-                                pass
+                            except ValueError: pass
 
-                    # En caso de que no haya columnas explícitas de Ingreso/Egreso
                     if not agregado:
                         for cell in rc:
                             m = regex_monto.search(cell)
@@ -325,23 +306,19 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
                                 try:
                                     v = float(m.group(1).replace(",", ""))
                                     if v > 0:
-                                        tipo = clasificar_concepto(" ".join(rc))
+                                        tipo_val = clasificar_concepto(row_str)
                                         rows.append({
-                                            "Origen": f"Pág.{i}",
-                                            "Fecha": fecha_val,
-                                            "Concepto": concepto_val,
-                                            "Monto": v,
-                                            "Tipo": tipo,
-                                            "Estado": "Normal",
+                                            "Origen": f"Pág.{i}", "Fecha": fecha_val, "Concepto": concepto_val,
+                                            "Monto": v, "Tipo": tipo_val, "Estado": "Normal"
                                         })
+                                        agregado = True
                                         break
-                                except ValueError:
-                                    pass
+                                except ValueError: pass
+                    if agregado:
+                        lineas_extraidas_tabla = True
 
-                    lineas_procesadas += 1
-
-            # Si la tabla falló o no capturó datos, recurrir al parseo estructurado de texto
-            if len(rows) == 0 and txt.strip():
+            # Intento 2: Parseo por líneas de texto si las tablas no capturaron suficiente información
+            if not lineas_extraidas_tabla and txt.strip():
                 rows.extend(parsear_lineas_texto(txt, f"Pág.{i}"))
 
         if len(texto_total.strip()) < 50 and len(rows) == 0:
@@ -356,6 +333,8 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
     )
 
     if not df.empty:
+        # Eliminar filas duplicadas exactas si ocurrieron por cruce de tabla/texto
+        df = df.drop_duplicates(subset=["Fecha", "Concepto", "Monto", "Tipo"]).reset_index(drop=True)
         df["Estado"] = "Normal"
         p95 = df["Monto"].quantile(0.95) if len(df) > 5 else 999999
         df.loc[
