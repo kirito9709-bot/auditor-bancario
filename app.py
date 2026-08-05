@@ -36,15 +36,19 @@ st.set_page_config(
 st.markdown(
     """
 <style>
+/* ── Globals ── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 #MainMenu, footer { visibility: hidden; }
 
-/* Sidebar Styling */
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
-    color: #ffffff;
+    background: linear-gradient(160deg, #1e293b 0%, #0f172a 100%);
 }
+</style>
+""",
+    unsafe_allow_html=True,
+)
 [data-testid="stSidebar"] stMarkdown, [data-testid="stSidebar"] label, [data-testid="stSidebar"] .stText {
     color: #f8fafc !important;
 }
