@@ -103,7 +103,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO (MOTOR BBVA REAL)
+# FUNCIONES DE PROCESAMIENTO (MOTOR BBVA REAL CORREGIDO)
 # ─────────────────────────────────────────────
 
 
@@ -131,17 +131,66 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
   with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
     texto_total = ""
     for i, page in enumerate(pdf.pages, 1):
+      # Extracción mediante tabla de pdfplumber para asegurar formato estructurado original
+      tables = page.extract_tables()
+      if tables:
+        for table in tables:
+          for row in table:
+            if not row:
+              continue
+            row_clean = [str(cell).strip() if cell else "" for cell in row]
+            texto_fila = " ".join(row_clean)
+            
+            # Filtrar encabezados y totales
+            if any(
+                term in texto_fila.lower()
+                for term in [
+                    "saldo anterior",
+                    "saldo final",
+                    "saldo promedio",
+                    "total de movimientos",
+                    "total cargos",
+                    "total abonos",
+                    "rfc",
+                    "página",
+                    "estado de cuenta",
+                ]
+            ):
+              continue
+
+            # Buscar patrón de fecha y montos en las celdas de la tabla
+            match_fecha = re.search(r"(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})", texto_fila)
+            match_monto = re.findall(r"([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", texto_fila)
+
+            if match_fecha and match_monto:
+              fecha = match_fecha.group(1)
+              monto = float(match_monto[-1].replace(",", ""))
+              # Concepto es el texto restante sin fecha ni montos
+              concepto = re.sub(r"\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2}", "", texto_fila)
+              for m in match_monto:
+                concepto = concepto.replace(m, "")
+              concepto = " ".join(concepto.split())
+
+              if concepto and monto > 0:
+                tipo = clasificar_concepto_bbva(concepto)
+                rows.append({
+                    "Origen": f"Pág.{i}",
+                    "Fecha": fecha,
+                    "Concepto": concepto,
+                    "Monto": monto,
+                    "Tipo": tipo,
+                    "Estado": "Normal",
+                })
+
+      # Extracción por líneas de texto plano complementaria si no se detectó tabla estructurada
       txt = page.extract_text() or ""
       texto_total += txt
-
-      # Procesamiento línea por línea enfocado estrictamente en formato de Estado de Cuenta BBVA
       lines = txt.split("\n")
       for line in lines:
         line_clean = line.strip()
         if not line_clean:
           continue
 
-        # Ignorar encabezados, pies de página o resúmenes irrelevantes
         line_lower = line_clean.lower()
         if any(
             term in line_lower
@@ -152,11 +201,6 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
                 "total de movimientos",
                 "total cargos",
                 "total abonos",
-                "cajero automatico",
-                "comision",
-                "iva",
-                "rendimiento",
-                "gat",
                 "rfc",
                 "página",
                 "estado de cuenta",
@@ -164,16 +208,13 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
         ):
           continue
 
-        # Regex específica para detectar transacciones de estados de cuenta bancarios (Fecha DD/MMM o DD/MM, Concepto, Importe)
-        # Ejemplo típico BBVA: "16 AGO  TRANSFERENCIA BANCARIA  1,500.00" o similar
         match = re.search(
-            r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})(?:\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2}))?",
+            r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
             line_clean,
         )
         if match:
           fecha = match.group(1).strip()
           concepto = match.group(2).strip()
-          # Determinar el monto (si hay múltiples columnas numéricas, se evalúa la última o la activa)
           monto_str = match.group(3).replace(",", "")
           try:
             monto = float(monto_str)
