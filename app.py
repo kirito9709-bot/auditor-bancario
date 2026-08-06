@@ -103,8 +103,70 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 )
 
 # ─────────────────────────────────────────────
-# FUNCIONES DE PROCESAMIENTO (MOTOR BBVA REAL CORREGIDO)
+# FUNCIONES DE PROCESAMIENTO (MOTOR BBVA REAL)
 # ─────────────────────────────────────────────
+
+
+MESES_MX = "ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|SET|OCT|NOV|DIC"
+
+# Fechas flexibles: "16 AGO", "16/AGO", "16-AGO-2026", "16/08", "16-08-24"...
+RE_FECHA = re.compile(
+    rf"^\s*(\d{{1,2}}\s*[/\-.\s]\s*(?:{MESES_MX}|\d{{1,2}})"
+    rf"(?:\s*[/\-.\s]\s*\d{{2,4}})?)\b",
+    re.IGNORECASE,
+)
+
+# Montos flexibles: "$1,234.56", "1234.56", "-1,234.56", "(1,234.56)"
+RE_MONTO = re.compile(
+    r"\(?-?\$?\s?(?:[0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)\.[0-9]{2}\)?"
+)
+
+# Frases que indican una fila de RESUMEN/SALDO (información financiera y el
+# total de movimientos), no un movimiento real. Solo se comparan contra
+# líneas que YA hicieron match como transacción, para nunca descartar un
+# movimiento real solo por mencionar una palabra parecida (p. ej. una
+# "COMISION" o un "RENDIMIENTO" sí son movimientos reales que deben quedar).
+TERMINOS_RESUMEN = [
+    "saldo anterior",
+    "saldo final",
+    "saldo promedio",
+    "saldo minimo",
+    "saldo máximo",
+    "saldo maximo",
+    "total de movimientos",
+    "total de cargos",
+    "total de abonos",
+    "total cargos",
+    "total abonos",
+    "suma de movimientos",
+    "número de movimientos",
+    "numero de movimientos",
+]
+
+# Líneas que nunca son parte de un movimiento (encabezados/pies de página,
+# textos legales). Solo se usan para NO arrastrarlas como continuación de
+# la descripción de un movimiento partido en varias líneas.
+TERMINOS_RUIDO = [
+    "página",
+    "pagina",
+    "estado de cuenta",
+    "gat nominal",
+    "gat real",
+    "cat promedio",
+    "banco de méxico",
+    "banco de mexico",
+    "condusef",
+]
+
+
+def _es_fila_resumen(texto: str) -> bool:
+  t = texto.lower()
+  return any(term in t for term in TERMINOS_RESUMEN)
+
+
+def _es_ruido(texto: str) -> bool:
+  t = texto.lower()
+  return any(term in t for term in TERMINOS_RUIDO)
 
 
 def clasificar_concepto_bbva(texto: str) -> str:
@@ -113,126 +175,210 @@ def clasificar_concepto_bbva(texto: str) -> str:
       k in t
       for k in [
           "deposito",
+          "depósito",
           "abono",
           "spei recibido",
           "transferencia recibida",
           "recibido",
+          "rendimiento",
+          "interes",
+          "interés",
       ]
   ):
     return "Ingreso"
   return "Egreso"
 
 
-def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
+def _limpiar_monto(txt_monto: str):
+  s = txt_monto.replace(",", "").replace("$", "").strip()
+  s = s.replace("(", "-").replace(")", "")
+  try:
+    return abs(float(s))
+  except ValueError:
+    return None
+
+
+def _procesar_bloques_texto(texto: str, origen: str) -> list:
+  """Agrupa el texto en 'bloques' que inician con una fecha y acumula las
+  líneas siguientes que no inician con fecha (típico de conceptos que el
+  PDF parte en 2 líneas). Busca el monto en TODO el bloque, no solo en la
+  primera línea, y solo entonces evalúa si es una fila de resumen/saldo."""
+  filas = []
+  bloque_fecha = None
+  bloque_texto = []
+
+  def cerrar_bloque():
+    if bloque_fecha is None or not bloque_texto:
+      return
+    texto_bloque = " ".join(bloque_texto)
+    montos = RE_MONTO.findall(texto_bloque)
+    if not montos:
+      return
+    monto = _limpiar_monto(montos[0])
+    if not monto:
+      return
+    concepto = RE_MONTO.sub("", texto_bloque).strip(" -:")
+    concepto = re.sub(r"\s{2,}", " ", concepto)
+    if _es_fila_resumen(f"{bloque_fecha} {concepto}"):
+      return
+    tipo = clasificar_concepto_bbva(concepto)
+    filas.append({
+        "Origen": origen,
+        "Fecha": bloque_fecha,
+        "Concepto": concepto or "(sin descripción)",
+        "Monto": monto,
+        "Tipo": tipo,
+        "Estado": "Normal",
+    })
+
+  for linea in texto.split("\n"):
+    linea = linea.strip()
+    if not linea:
+      continue
+    m_fecha = RE_FECHA.match(linea)
+    if m_fecha:
+      cerrar_bloque()
+      bloque_fecha = m_fecha.group(1).strip()
+      bloque_texto = [linea[m_fecha.end():].strip()]
+    elif bloque_fecha is not None and not _es_ruido(linea):
+      bloque_texto.append(linea)
+  cerrar_bloque()
+  return filas
+
+
+def _extraer_de_tabla(tabla, num_pagina: int) -> list:
+  """Usa las tablas detectadas por pdfplumber (columnas reales) cuando el
+  PDF las expone; es más confiable que el texto plano porque no depende de
+  que las columnas queden alineadas con espacios."""
+  filas = []
+  if not tabla:
+    return filas
+
+  idx_fecha = idx_concepto = idx_cargo = idx_abono = idx_monto = None
+  fila_encabezado = -1
+  for i, fila in enumerate(tabla[:3]):
+    celdas = [str(c).strip().lower() if c else "" for c in fila]
+    texto_fila = " ".join(celdas)
+    if "fecha" in texto_fila and ("concepto" in texto_fila or "descrip" in texto_fila):
+      fila_encabezado = i
+      for j, c in enumerate(celdas):
+        if "fecha" in c and idx_fecha is None:
+          idx_fecha = j
+        elif ("concepto" in c or "descrip" in c) and idx_concepto is None:
+          idx_concepto = j
+        elif "cargo" in c and idx_cargo is None:
+          idx_cargo = j
+        elif "abono" in c and idx_abono is None:
+          idx_abono = j
+        elif ("importe" in c or "monto" in c) and idx_monto is None:
+          idx_monto = j
+      break
+
+  inicio = fila_encabezado + 1 if fila_encabezado >= 0 else 0
+  for fila in tabla[inicio:]:
+    celdas = [str(c).strip() if c else "" for c in fila]
+    if not any(celdas):
+      continue
+
+    fecha = None
+    candidatas_fecha = (
+        [celdas[idx_fecha]] if idx_fecha is not None and idx_fecha < len(celdas) else celdas
+    )
+    for c in candidatas_fecha:
+      m = RE_FECHA.match(c)
+      if m:
+        fecha = m.group(1).strip()
+        break
+    if not fecha:
+      continue
+
+    monto_txt = None
+    tipo = None
+    if idx_cargo is not None and idx_cargo < len(celdas) and RE_MONTO.search(celdas[idx_cargo]):
+      monto_txt = celdas[idx_cargo]
+      tipo = "Egreso"
+    elif idx_abono is not None and idx_abono < len(celdas) and RE_MONTO.search(celdas[idx_abono]):
+      monto_txt = celdas[idx_abono]
+      tipo = "Ingreso"
+    elif idx_monto is not None and idx_monto < len(celdas) and RE_MONTO.search(celdas[idx_monto]):
+      monto_txt = celdas[idx_monto]
+
+    concepto_partes = []
+    if idx_concepto is not None and idx_concepto < len(celdas):
+      concepto_partes = [celdas[idx_concepto]]
+    else:
+      for j, c in enumerate(celdas):
+        if j in (idx_fecha, idx_cargo, idx_abono, idx_monto):
+          continue
+        if RE_MONTO.fullmatch(c.strip()):
+          continue
+        if c.strip():
+          concepto_partes.append(c.strip())
+    concepto = " ".join(p for p in concepto_partes if p).strip()
+
+    if monto_txt is None:
+      candidatos = [c for c in celdas if RE_MONTO.search(c)]
+      if not candidatos:
+        continue
+      monto_txt = candidatos[0]
+
+    m_monto = RE_MONTO.search(monto_txt)
+    if not m_monto:
+      continue
+    monto = _limpiar_monto(m_monto.group(0))
+    if not monto:
+      continue
+
+    if _es_fila_resumen(f"{fecha} {concepto}"):
+      continue
+
+    if tipo is None:
+      tipo = clasificar_concepto_bbva(concepto)
+
+    filas.append({
+        "Origen": f"Pág.{num_pagina} (tabla)",
+        "Fecha": fecha,
+        "Concepto": concepto or "(sin descripción)",
+        "Monto": monto,
+        "Tipo": tipo,
+        "Estado": "Normal",
+    })
+  return filas
+
+
+def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool, str]:
+  """Extrae movimientos de un PDF digital (no escaneado).
+
+  Estrategia por página: 1) intenta usar las tablas reales que detecta
+  pdfplumber (más confiable); 2) si no hay tablas útiles, cae a un parseo
+  de texto por 'bloques' que tolera conceptos partidos en varias líneas y
+  distintos formatos de fecha/monto. En ambos casos, únicamente se
+  descartan filas que son claramente resumen financiero o saldos/total de
+  movimientos — nunca movimientos reales.
+  """
   rows = []
-  es_escaneado = False
   pdf_bytes = file_pdf.read()
 
   with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
     texto_total = ""
     for i, page in enumerate(pdf.pages, 1):
-      # Extracción mediante tabla de pdfplumber para asegurar formato estructurado original
-      tables = page.extract_tables()
-      if tables:
-        for table in tables:
-          for row in table:
-            if not row:
-              continue
-            row_clean = [str(cell).strip() if cell else "" for cell in row]
-            texto_fila = " ".join(row_clean)
-            
-            # Filtrar encabezados y totales
-            if any(
-                term in texto_fila.lower()
-                for term in [
-                    "saldo anterior",
-                    "saldo final",
-                    "saldo promedio",
-                    "total de movimientos",
-                    "total cargos",
-                    "total abonos",
-                    "rfc",
-                    "página",
-                    "estado de cuenta",
-                ]
-            ):
-              continue
-
-            # Buscar patrón de fecha y montos en las celdas de la tabla
-            match_fecha = re.search(r"(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})", texto_fila)
-            match_monto = re.findall(r"([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", texto_fila)
-
-            if match_fecha and match_monto:
-              fecha = match_fecha.group(1)
-              monto = float(match_monto[-1].replace(",", ""))
-              # Concepto es el texto restante sin fecha ni montos
-              concepto = re.sub(r"\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2}", "", texto_fila)
-              for m in match_monto:
-                concepto = concepto.replace(m, "")
-              concepto = " ".join(concepto.split())
-
-              if concepto and monto > 0:
-                tipo = clasificar_concepto_bbva(concepto)
-                rows.append({
-                    "Origen": f"Pág.{i}",
-                    "Fecha": fecha,
-                    "Concepto": concepto,
-                    "Monto": monto,
-                    "Tipo": tipo,
-                    "Estado": "Normal",
-                })
-
-      # Extracción por líneas de texto plano complementaria si no se detectó tabla estructurada
       txt = page.extract_text() or ""
-      texto_total += txt
-      lines = txt.split("\n")
-      for line in lines:
-        line_clean = line.strip()
-        if not line_clean:
-          continue
+      texto_total += f"\n--- Página {i} ---\n{txt}"
 
-        line_lower = line_clean.lower()
-        if any(
-            term in line_lower
-            for term in [
-                "saldo anterior",
-                "saldo final",
-                "saldo promedio",
-                "total de movimientos",
-                "total cargos",
-                "total abonos",
-                "rfc",
-                "página",
-                "estado de cuenta",
-            ]
-        ):
-          continue
+      filas_pagina = []
+      try:
+        tablas = page.extract_tables() or []
+      except Exception:
+        tablas = []
+      for tabla in tablas:
+        filas_pagina.extend(_extraer_de_tabla(tabla, i))
 
-        match = re.search(
-            r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
-            line_clean,
-        )
-        if match:
-          fecha = match.group(1).strip()
-          concepto = match.group(2).strip()
-          monto_str = match.group(3).replace(",", "")
-          try:
-            monto = float(monto_str)
-            if monto > 0:
-              tipo = clasificar_concepto_bbva(concepto)
-              rows.append({
-                  "Origen": f"Pág.{i}",
-                  "Fecha": fecha,
-                  "Concepto": concepto,
-                  "Monto": monto,
-                  "Tipo": tipo,
-                  "Estado": "Normal",
-              })
-          except ValueError:
-            pass
+      if not filas_pagina:
+        filas_pagina = _procesar_bloques_texto(txt, origen=f"Pág.{i}")
 
-    if len(texto_total.strip()) < 50 and len(rows) == 0:
-      es_escaneado = True
+      rows.extend(filas_pagina)
+
+    es_escaneado = len(texto_total.strip()) < 50 and len(rows) == 0
 
   df = (
       pd.DataFrame(rows)
@@ -252,7 +398,7 @@ def extraer_transacciones_pdf(file_pdf) -> tuple[pd.DataFrame, bool]:
         "⚠️ Inconsistencia"
     )
 
-  return df, es_escaneado
+  return df, es_escaneado, texto_total
 
 
 def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
@@ -266,27 +412,7 @@ def ocr_pdf_a_digital(pdf_bytes: bytes) -> tuple[pd.DataFrame, bytes]:
   for idx, img in enumerate(images, 1):
     txt = pytesseract.image_to_string(img, lang="spa+eng")
     all_text += f"\n--- Página {idx} ---\n" + txt
-    lines = txt.split("\n")
-    for line in lines:
-      match = re.search(
-          r"^(\d{1,2}\s+[A-Za-z]{3}|\d{2}[/-]\d{2})\s+(.*?)\s+([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})",
-          line.strip(),
-      )
-      if match:
-        fecha, concepto, monto_str = match.groups()
-        try:
-          monto = float(monto_str.replace(",", ""))
-          tipo = clasificar_concepto_bbva(concepto)
-          rows.append({
-              "Origen": f"OCR Pág.{idx}",
-              "Fecha": fecha.strip(),
-              "Concepto": concepto.strip(),
-              "Monto": monto,
-              "Tipo": tipo,
-              "Estado": "Normal",
-          })
-        except ValueError:
-          pass
+    rows.extend(_procesar_bloques_texto(txt, origen=f"OCR Pág.{idx}"))
 
   df = (
       pd.DataFrame(rows)
@@ -569,12 +695,16 @@ if uploaded_file is not None:
   df_tx = pd.DataFrame()
   es_escaneado = False
   pdf_digital = b""
+  texto_debug = ""
   bytes_archivo_original = uploaded_file.read()
   uploaded_file.seek(0)
 
   with st.spinner("🔍 Analizando datos del documento..."):
     if ext == "pdf":
-      df_tx, es_escaneado = extraer_transacciones_pdf(uploaded_file)
+      try:
+        df_tx, es_escaneado, texto_debug = extraer_transacciones_pdf(uploaded_file)
+      except Exception as e:
+        st.error(f"⚠️ No se pudo leer el PDF: {e}")
       if es_escaneado:
         st.warning("⚠️ Documento escaneado detectado. Procesando vía OCR...")
         uploaded_file.seek(0)
@@ -780,6 +910,26 @@ if uploaded_file is not None:
     st.warning(
         "⚠️ No se identificaron transacciones válidas en el documento cargado."
     )
+    if ext == "pdf" and texto_debug.strip():
+      with st.expander("🔍 Ver texto extraído del PDF (para depuración)"):
+        st.caption(
+            "Esto es exactamente lo que se logró leer del PDF. Si tus"
+            " movimientos no aparecen aquí con un formato reconocible de"
+            " fecha + concepto + monto, compártelo para ajustar el"
+            " analizador a tu formato exacto."
+        )
+        st.text(texto_debug[:8000])
+        if len(texto_debug) > 8000:
+          st.caption(
+              f"Mostrando los primeros 8,000 de {len(texto_debug):,}"
+              " caracteres extraídos."
+          )
+    elif ext == "pdf":
+      st.info(
+          "ℹ️ No se pudo extraer texto de este PDF. Probablemente es una"
+          " imagen escaneada sin capa de texto; si tienes Tesseract/OCR"
+          " disponible en el entorno, debería activarse automáticamente."
+      )
 
 else:
   st.info(
